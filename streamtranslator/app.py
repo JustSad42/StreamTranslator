@@ -25,7 +25,7 @@ from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMenu, QSystemTrayIcon
 
-from . import APP_NAME, __version__, appupdate, history, updater
+from . import APP_NAME, __version__, appupdate, history, logs, updater
 from .glossary import DATA_DIR, Glossary
 from .pipeline import (NO_WINDOW, Callbacks, Cancelled, JobError, JobParams, ffmpeg_exe, fetch_info, grab_frame,
                        lang_name, load_model, model_device, model_is_downloaded, read_meta, read_srt, reburn,
@@ -41,7 +41,8 @@ DEFAULTS = {
     "live_language": "", "live_orig": True, "live_isolate": False, "live_chat": True,
     "overlay_font": 30, "overlay_bg": 0.55, "ui_scale": "auto", "notify": True, "auto_update": True,
     "method": "two-step", "translator": "better", "auto_details": True, "live_method": "two-step",
-    "custom_model": "", "setup_done": False, "app_update": True, "app_update": True,
+    "custom_model": "", "setup_done": False, "app_update": True, "speakers": False,
+    "last_version": "", "updated_from": "", "skip_version": "", "app_update": True,
 }
 # Methods that touch Qt widgets must run on the UI thread.
 MAIN_THREAD = {"components.model_folder", "os.browse", "os.copy", "os.clipboard", "overlay.show", "overlay.style", "obs.url", "ui.scale"}
@@ -122,7 +123,7 @@ class Backend(QObject):
             except (JobError, ValueError, Cancelled) as e:
                 self.emit("reply", id=rid, ok=False, error=str(e) or "Cancelled")
             except Exception as e:
-                traceback.print_exc()
+                logs.log.exception(f"{method} failed")
                 self.emit("reply", id=rid, ok=False, error=f"{type(e).__name__}: {e}")
         if method in MAIN_THREAD:
             run()
@@ -190,7 +191,8 @@ class Backend(QObject):
             ffmpeg_ok = False
         return {"settings": self.settings, "glossary": gl.summary(), "gpu": self.gpu, "version": __version__,
                 "scale": {"value": self.window.view.zoomFactor(), "auto": auto_scale()},
-                "update": self.update_info, "app_update": self.app_update, "ffmpeg": ffmpeg_ok, "queue": self._queue_view(),
+                "update": self.update_info, "app_update": self.app_update, "whats_new": self._whats_new(),
+                "crashed": logs.previous_crash, "ffmpeg": ffmpeg_ok, "queue": self._queue_view(),
                 "components": comp, "setup_needed": setup_needed,
                 "model": {"name": self.settings.get("model"),
                           "device": model_device(self.settings.get("model", "large-v3"))}}
@@ -233,15 +235,60 @@ class Backend(QObject):
             raise ValueError("Finish or stop the running translations first, then update.")
         if self.updating:
             raise ValueError("The update is already downloading.")
+        return self._install_release(info, updated_from=__version__)
+
+    def m_appupdate_rollback(self):
+        """Go back to the version installed before the last update."""
+        prev = self.settings.get("updated_from")
+        if not prev or not appupdate.is_newer(__version__, prev):
+            raise ValueError("There's no earlier version to go back to.")
+        info = appupdate.release_info(prev)
+        if not info.get("asset"):
+            raise ValueError(f"Version {prev}'s installer isn't on GitHub anymore.")
+        logs.log.info(f"Going back from {__version__} to {prev}")
+        # don't offer this version again right away (newer versions will still be offered)
+        return self._install_release(info, updated_from="", skip=__version__)
+
+    def _install_release(self, info: dict, updated_from: str, skip: str = ""):
+        if any(j["status"] in ("pending", "running") for j in self.jobs) or self.live:
+            raise ValueError("Finish or stop the running translations first, then update.")
+        if self.updating:
+            raise ValueError("The update is already downloading.")
         self.updating = True
         try:
             path = appupdate.download(info["asset"], progress=lambda f: self.emit("appupdate.progress", f=f))
+            appupdate.save_notes(info["latest"], info.get("notes", ""))
+            self.m_settings_save({"updated_from": updated_from, "skip_version": skip})
+            logs.log.info(f"Installing {info['latest']} (from {__version__})")
             appupdate.install(path)
         finally:
             self.updating = False
         self.emit("appupdate.progress", f=1, installing=True)
         self._quit.emit()
         return {"installing": info["latest"]}
+
+    def _whats_new(self) -> dict | None:
+        """Release notes once, on the first start after an update."""
+        last = self.settings.get("last_version") or ""
+        if last == __version__:
+            return None
+        self.m_settings_save({"last_version": __version__})
+        if not last or not appupdate.is_newer(__version__, last):
+            return None
+        return {"version": __version__, "from": last, "notes": appupdate.notes_for(__version__)}
+
+    # ---- problems
+    def m_app_report(self, what: str = ""):
+        extra = {"gpu": self.gpu or "", "Model": self.settings.get("model"), "Method": self.settings.get("method"),
+                 "Translator": self.settings.get("translator")}
+        url = logs.report_url(what, extra)
+        QDesktopServices.openUrl(QUrl(url))
+        return True
+
+    def m_app_logs(self):
+        logs.LOG_DIR.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(logs.LOG_DIR)))
+        return True
 
     @Slot()
     def _quit_for_update(self):
@@ -433,12 +480,15 @@ class Backend(QObject):
             cb = Callbacks(
                 stage=lambda i, n, label: self.emit("clip.stage", job=jid, i=i, n=n, label=label),
                 progress=lambda f: self.emit("clip.progress", job=jid, f=round(f, 4)),
-                log=lambda s: self.emit("clip.log", job=jid, text=s),
+                log=lambda s: (logs.log.info(f"[{job['label']}] {s}"), self.emit("clip.log", job=jid, text=s)),
                 segment=lambda seg, kind: self.emit("clip.segment", job=jid, start=seg.start, end=seg.end,
                                                     text=seg.text, kind=kind),
                 cancel=cancel)
+            logs.log.info(f"Job started: {job['label']} ({job['kind']}) "
+                          + str({k: v for k, v in job["params"].items() if k not in ("out_dir", "champions")}))
             try:
                 result = self._run_clip(job, cb) if job["kind"] == "clip" else self._run_burn(job, cb)
+                logs.log.info(f"Job finished: {job['label']}")
                 job.update(status="done", result=result)
                 batch_done += 1
                 self.emit("clip.done", job=jid, kind=job["kind"], **result)
@@ -446,13 +496,17 @@ class Backend(QObject):
                 job["status"] = "cancelled"
                 self.emit("clip.cancelled", job=jid)
             except JobError as e:
+                logs.log.warning(f"Job failed: {job['label']}: {e}")
                 job.update(status="error", error=str(e))
                 self.emit("clip.error", job=jid, message=str(e))
                 self.notify("Translation failed", f"{job['label']}: {str(e).splitlines()[0]}")
-            except Exception:
-                msg = traceback.format_exc()
+            except Exception as e:
+                logs.log.exception(f"Job crashed: {job['label']}")
+                msg = (f"Something went wrong: {type(e).__name__}: {e}\n\n"
+                       "The details are in the log. Use Report to send them.")
                 job.update(status="error", error=msg)
-                self.emit("clip.error", job=jid, message=msg)
+                self.emit("clip.error", job=jid, message=msg, report=True)
+                self.notify("Translation failed", f"{job['label']}: {type(e).__name__}")
             self._queue_changed()
 
     def _run_clip(self, job: dict, cb: Callbacks) -> dict:
@@ -466,7 +520,7 @@ class Backend(QObject):
                            use_glossary=bool(p.get("use_glossary", True)), isolate=bool(p.get("isolate")),
                            label=job["label"], method=p.get("method", "two-step"),
                            translator=self.settings.get("translator", "better"),
-                           auto_details=bool(p.get("auto_details", True)))
+                           auto_details=bool(p.get("auto_details", True)), speakers=bool(p.get("speakers")))
         r = run_job(params, cb)
         self.emit("model.status", state="ready", name=params.model, device=model_device(params.model))
         m = r.meta
@@ -695,6 +749,16 @@ class Backend(QObject):
         fixed, n = Glossary.get().fix(text, english=True)
         return {"fixed": fixed, "changes": n}
 
+    def m_glossary_slang_test(self, text: str, lang: str):
+        from . import translate
+        if not translate.supported(lang):
+            raise ValueError("The text translator doesn't cover that language.")
+        gl = Glossary.get()
+        helped, n = gl.prepare(text, lang)
+        tr = translate.Translator.get(self.settings.get("translator", "better"))
+        plain, out = tr.translate([text, helped], lang)
+        return {"plain": gl.fix(plain)[0], "helped": gl.fix(out)[0], "changes": n}
+
     def m_glossary_refresh(self):
         Glossary.get().refresh_champions(force=True)
         return Glossary.get().summary()
@@ -895,14 +959,18 @@ def selftest(out_path: str) -> int:
 
 
 def main() -> int:
-    if sys.stdout is None or sys.stderr is None:   # pythonw / packaged app has no console
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        f = open(DATA_DIR / "app.log", "a", encoding="utf-8", buffering=1)
-        sys.stdout = sys.stdout or f
-        sys.stderr = sys.stderr or f
     updater.activate()                              # newest downloaded yt-dlp, before anything imports it
+    windowed = sys.stdout is None or sys.stderr is None   # no console: library output goes to the log
+    if windowed:
+        sys.stdout = sys.stdout or open(os.devnull, "w")
+        sys.stderr = sys.stderr or open(os.devnull, "w")
     if len(sys.argv) >= 3 and sys.argv[1] == "--selftest":
         return selftest(sys.argv[2])
+    logs.setup(windowed)                            # log file, crash capture, "didn't close normally" check
+    try:
+        (DATA_DIR / "app.log").unlink(missing_ok=True)     # the old unbounded log from 2.2 and earlier
+    except OSError:
+        pass
     if sys.platform == "win32":
         try:
             import ctypes
@@ -918,7 +986,9 @@ def main() -> int:
     w = MainWindow()
     app.setWindowIcon(w.windowIcon())
     w.show()
-    return app.exec()
+    code = app.exec()
+    logs.clean_exit()
+    return code
 
 
 if __name__ == "__main__":

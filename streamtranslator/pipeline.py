@@ -83,11 +83,14 @@ class VodInfo:
     start_ts: float | None = None    # unix time the broadcast started (for VOD sync)
     thumbnail: str = ""
     storyboard: dict | None = None   # Twitch sprite sheets for instant hover previews
+    site: str = "twitch"             # twitch / youtube / kick / other
+    video_only: set = field(default_factory=set)   # quality labels whose stream has no sound (YouTube)
 
     def to_dict(self) -> dict:
         return {"url": self.url, "id": self.id, "title": self.title, "channel": self.channel,
                 "duration": self.duration, "url_start": self.url_start, "start_ts": self.start_ts,
-                "thumbnail": self.thumbnail, "storyboard": self.storyboard}
+                "thumbnail": self.thumbnail, "storyboard": self.storyboard, "site": self.site,
+                "link": vod_link(self, 0)}
 
 
 class _QuietLogger:
@@ -105,12 +108,46 @@ def timestamp_from_url(url: str) -> float | None:
         return None
 
 
+_KICK_VOD = re.compile(r"kick\.com/(?:[\w-]+/)?videos?/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", re.I)
+
+
+def _kick_info(url: str, opts: dict) -> dict | None:
+    """yt-dlp's Kick VOD reader breaks whenever Kick changes its API. Kick's own video API
+    still gives the stream playlist, which yt-dlp reads fine."""
+    m = _KICK_VOD.search(url)
+    if not m:
+        return None
+    import json
+    import urllib.request
+    import yt_dlp
+    try:
+        req = urllib.request.Request(f"https://kick.com/api/v1/video/{m.group(1)}",
+                                     headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(d["source"], download=False)
+    except Exception:
+        return None
+    ls = d.get("livestream") or {}
+    start = ls.get("start_time") or d.get("created_at")
+    try:
+        from datetime import datetime
+        start_ts = datetime.fromisoformat(str(start).replace("Z", "+00:00")).timestamp() if start else None
+    except ValueError:
+        start_ts = None
+    info.update(extractor_key="Kick", id=m.group(1), webpage_url=url, title=ls.get("session_title") or "Kick VOD",
+                uploader=(ls.get("channel") or {}).get("slug") or "kick", thumbnail=ls.get("thumbnail") or "",
+                timestamp=start_ts, duration=info.get("duration") or (ls.get("duration") or 0) / 1000)
+    return info
+
+
 def fetch_info(url: str) -> VodInfo:
     import yt_dlp
 
     url = url.strip()
     if not url:
-        raise JobError("Paste a Twitch VOD link first.")
+        raise JobError("Paste a VOD link first (Twitch, YouTube or Kick).")
     if url.isdigit():
         url = f"https://www.twitch.tv/videos/{url}"
     opts = {"quiet": True, "no_warnings": True, "skip_download": True,
@@ -120,30 +157,50 @@ def fetch_info(url: str) -> VodInfo:
             info = ydl.extract_info(url, download=False)
     except Exception as e:  # yt-dlp raises DownloadError with a readable message
         msg = re.sub(r"\x1b\[[0-9;]*m", "", str(e)).replace("ERROR: ", "")
-        raise JobError(f"Couldn't read that VOD.\n{msg}\n\n"
-                       "Subscriber-only VODs can't be downloaded without logging in.") from None
+        kick = _kick_info(url, opts)
+        if kick:
+            info = kick
+        else:
+            info = None
+    if info is None:
+        hint = ("\n\nSubscriber-only VODs can't be downloaded without logging in." if "twitch" in url.lower()
+                else "\n\nMembers-only, private and age-restricted videos can't be downloaded." if "youtu" in url.lower()
+                else "")
+        raise JobError(f"Couldn't read that VOD.\n{msg}{hint}") from None
 
     if info.get("_type") == "playlist":
         raise JobError("That link is a channel or playlist. Paste a single VOD link "
-                       "(twitch.tv/videos/123456789).")
+                       "(twitch.tv/videos/123…, a YouTube video, or a Kick video).")
     if info.get("is_live"):
-        raise JobError("That stream is live. Wait for the VOD, then use the VOD link.")
+        raise JobError("That stream is live. Use the Live tab, or wait for the VOD.")
 
+    key = (info.get("extractor_key") or "").lower()
+    site = "twitch" if "twitch" in key else "youtube" if "youtube" in key else "kick" if "kick" in key else "other"
+    has_audio = lambda f: f.get("acodec") not in (None, "none") or (f.get("acodec") is None and site != "youtube")
     vids = [f for f in info.get("formats") or []
             if f.get("url") and f.get("vcodec") not in (None, "none") and f.get("height")]
     if not vids:
         raise JobError("No playable video formats found for that link.")
-    vids.sort(key=lambda f: (f.get("height") or 0, f.get("fps") or 0, f.get("tbr") or 0))
+    # at equal height prefer streams with sound, then H.264 (plays everywhere, copies cleanly into .mp4)
+    vids.sort(key=lambda f: (f.get("height") or 0, has_audio(f), str(f.get("vcodec", "")).startswith("avc"),
+                             f.get("fps") or 0, f.get("tbr") or 0))
 
     def best_under(h: int):
         under = [f for f in vids if f["height"] <= h]
         return (under or vids[:1])[-1]
 
-    streams = {"Source": vids[-1]["url"], "720p": best_under(720)["url"], "480p": best_under(480)["url"]}
-    audio_fmt = next((f for f in info.get("formats") or [] if f.get("url") and f.get("vcodec") in (None, "none")
-                      and f.get("acodec") not in (None, "none") and f.get("format_note") != "storyboard"), None)
-    if audio_fmt:
-        streams["Audio"] = audio_fmt["url"]
+    picks = {"Source": vids[-1], "720p": best_under(720), "480p": best_under(480)}
+    streams = {k: f["url"] for k, f in picks.items()}
+    auds = [f for f in info.get("formats") or [] if f.get("url") and f.get("vcodec") in (None, "none")
+            and f.get("acodec") not in (None, "none") and f.get("format_note") != "storyboard"]
+    # AAC first (fits .mp4/.m4a as is), skip YouTube's "DRC" loudness-squashed copies, then best bitrate
+    auds.sort(key=lambda f: ("drc" not in str(f.get("format_id", "")).lower(),
+                             str(f.get("acodec", "")).startswith("mp4a"), f.get("abr") or f.get("tbr") or 0))
+    if auds:
+        streams["Audio"] = auds[-1]["url"]
+    video_only = {k for k, f in picks.items() if not has_audio(f)}
+    if video_only and "Audio" not in streams:
+        raise JobError("That video has no downloadable sound track.")
     preview = next((f for f in vids if f["height"] >= 360), vids[-1])["url"]
     ua = (vids[-1].get("http_headers") or {}).get("User-Agent", "")
 
@@ -160,8 +217,10 @@ def fetch_info(url: str) -> VodInfo:
         start_ts=float(info["timestamp"]) if info.get("timestamp") else None,
         thumbnail=(info.get("thumbnail") or "").replace("0x0", "640x360"),
         storyboard=storyboard,
+        site=site,
+        video_only=video_only,
         url=info.get("webpage_url") or url,
-        id=str(info.get("id") or "").lstrip("v"),
+        id=str(info.get("id") or "").lstrip("v") if site == "twitch" else str(info.get("id") or ""),
         title=info.get("title") or info.get("description") or "Untitled",
         channel=info.get("uploader") or info.get("uploader_id") or info.get("channel") or "streamer",
         duration=float(info.get("duration") or 0),
@@ -172,10 +231,17 @@ def fetch_info(url: str) -> VodInfo:
     )
 
 
-def twitch_link(info: VodInfo, seconds: float) -> str:
-    if "twitch.tv" in info.url and info.id:
-        return f"https://www.twitch.tv/videos/{info.id}?t={format_hms_tag(seconds)}"
+def vod_link(info: VodInfo, seconds: float) -> str:
+    """A link that opens the VOD at `seconds`."""
+    s = max(0, int(seconds))
+    if info.site == "twitch" and info.id:
+        return f"https://www.twitch.tv/videos/{info.id}?t={format_hms_tag(s)}"
+    if info.site == "youtube" and info.id:
+        return f"https://www.youtube.com/watch?v={info.id}&t={s}s"
     return info.url
+
+
+twitch_link = vod_link
 
 
 # ---------------------------------------------------------------- ffmpeg helpers
@@ -230,14 +296,21 @@ def run_ffmpeg(args: list[str], duration: float, progress: Callable[[float], Non
 def download_section(info: VodInfo, quality: str, start: float, end: float, out: Path,
                      progress: Callable[[float], None], cancel: threading.Event, audio_only: bool = False) -> None:
     dur = end - start
+    ss = ["-ss", f"{start:.3f}"]
     if audio_only:
         url = info.streams.get("Audio") or info.streams.get("480p") or info.streams["Source"]
-        maps = ["-map", "0:a:0", "-vn"]
+        inputs, maps = [*ss, "-i", url], ["-map", "0:a:0", "-vn"]
     else:
-        url = info.streams.get(quality) or info.streams["Source"]
-        maps = ["-map", "0:v:0?", "-map", "0:a:0?"]
-    run_ffmpeg([*_ua_args(info.user_agent), "-ss", f"{start:.3f}", "-i", url, "-t", f"{dur:.3f}",
-                *maps, "-c", "copy", "-bsf:a", "aac_adtstoasc", "-avoid_negative_ts", "make_zero",
+        q = quality if quality in info.streams else "Source"
+        url = info.streams[q]
+        if q in info.video_only:          # YouTube: picture and sound are separate streams
+            inputs = [*ss, "-i", url, *_ua_args(info.user_agent), *ss, "-i", info.streams["Audio"]]
+            maps = ["-map", "0:v:0", "-map", "1:a:0"]
+        else:
+            inputs, maps = [*ss, "-i", url], ["-map", "0:v:0?", "-map", "0:a:0?"]
+    # the .mp4/.m4a writer adds the ADTS->ASC fix for AAC by itself (and skips it for Opus)
+    run_ffmpeg([*_ua_args(info.user_agent), *inputs, "-t", f"{dur:.3f}",
+                *maps, "-c", "copy", "-avoid_negative_ts", "make_zero",
                 "-movflags", "+faststart", str(out)],
                dur, progress, cancel)
     if not out.exists() or out.stat().st_size < 10_000:
@@ -251,6 +324,7 @@ class Segment:
     start: float
     end: float
     text: str
+    speaker: int = 0      # 0 = the person who talks most; others get coloured subtitles
 
 
 _model_cache: dict[str, object] = {}
@@ -423,7 +497,7 @@ def to_cues(segments: list[Segment]) -> list[Segment]:
             wrapped = p if cjk else _balanced_wrap(p, line_len)
             if cjk and len(p) > line_len:
                 wrapped = p[:line_len] + "\n" + p[line_len:]
-            cues.append(Segment(t, t + d, wrapped))
+            cues.append(Segment(t, t + d, wrapped, seg.speaker))
             t += d
     # minimum display time without overlapping the next cue
     for i, c in enumerate(cues):
@@ -433,23 +507,52 @@ def to_cues(segments: list[Segment]) -> list[Segment]:
     return cues
 
 
-def write_srt(segments: list[Segment], path: Path) -> None:
+def _colored(text: str, speaker: int) -> str:
+    from .speakers import color
+    c = color(speaker)
+    return f'<font color="{c}">{text}</font>' if c else text
+
+
+def write_srt(segments: list[Segment], path: Path, shift: float = 0.0) -> None:
+    """shift: seconds added to every time (to line subtitles up with a video that starts earlier)."""
     lines = []
     for i, c in enumerate(to_cues(segments), 1):
-        lines += [str(i), f"{srt_ts(c.start)} --> {srt_ts(c.end)}", c.text, ""]
+        lines += [str(i), f"{srt_ts(max(0.0, c.start + shift))} --> {srt_ts(max(0.0, c.end + shift))}",
+                  _colored(c.text, c.speaker), ""]
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def audio_offset(ref, other, max_s: float = 15.0) -> float:
+    """Seconds d such that other[t + d] matches ref[t] (both 16 kHz mono). Uses the first minute."""
+    import numpy as np
+    n = min(len(ref), len(other), 16000 * 60)
+    if n < 16000 * 3:
+        return 0.0
+    a = ref[:n] - ref[:n].mean()
+    b = other[:n] - other[:n].mean()
+    size = 1 << (2 * n - 1).bit_length()
+    c = np.fft.irfft(np.fft.rfft(b, size) * np.conj(np.fft.rfft(a, size)), size)
+    m = int(max_s * 16000)
+    cand = np.concatenate([c[:m], c[-m:]])
+    k = int(np.argmax(cand))
+    return (k if k < m else k - 2 * m) / 16000
+
+
 def write_transcript(path: Path, info: VodInfo, start: float, end: float, lang: str, prob: float,
-                     model_name: str, english: list[Segment], original: list[Segment] | None) -> None:
+                     model_name: str, english: list[Segment], original: list[Segment] | None,
+                     clip_shift: float = 0.0) -> None:
+    """clip_shift: how much later a moment appears in the saved video than in the VOD section."""
+    many = len({s.speaker for s in english}) > 1
+
     def block(segs: list[Segment]) -> list[str]:
-        return [f"[VOD {format_ts(start + s.start):>8} | clip {format_ts(s.start):>6}]  {s.text}" for s in segs]
+        return [f"[VOD {format_ts(start + s.start):>8} | clip {format_ts(s.start + clip_shift):>6}]  "
+                f"{f'Speaker {s.speaker + 1}: ' if many else ''}{s.text}" for s in segs]
 
     head = [
         info.title,
         f"Channel: {info.channel}",
         f"VOD: {info.url}",
-        f"Section: {format_ts(start)} - {format_ts(end)}   ({twitch_link(info, start)})",
+        f"Section: {format_ts(start)} - {format_ts(end)}   ({vod_link(info, start)})",
         f"Detected language: {lang_name(lang)} ({prob:.0%})   Model: whisper {model_name}",
         "",
     ]
@@ -511,6 +614,7 @@ class JobParams:
     method: str = "two-step"       # "two-step" (Whisper writes it down, NLLB translates) or "whisper"
     translator: str = "better"     # NLLB size for two-step: "standard" or "better"
     auto_details: bool = True      # read champions/player names off the video for the glossary
+    speakers: bool = False         # tell speakers apart and colour the others' subtitles
 
 
 @dataclass
@@ -540,14 +644,54 @@ def _safe(name: str) -> str:
     return re.sub(r"[^\w.-]+", "_", name, flags=re.UNICODE).strip("_")[:40] or "stream"
 
 
+class _Either:
+    """Cancelled when either event is set (the job's cancel, or 'stop the background download')."""
+    def __init__(self, *events):
+        self.events = events
+
+    def is_set(self) -> bool:
+        return any(e.is_set() for e in self.events)
+
+
+DL_FILE = "download.json"
+
+
+def _downloads(folder: Path) -> dict:
+    import json
+    try:
+        return json.loads((folder / DL_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _remember_download(folder: Path, kind: str, file: Path, quality: str | None = None):
+    import json
+    d = _downloads(folder)
+    d[kind] = {"file": file.name, "quality": quality, "size": file.stat().st_size, "at": time.time()}
+    (folder / DL_FILE).write_text(json.dumps(d, indent=2), encoding="utf-8")
+
+
+def _cached(folder: Path, kind: str, quality: str | None = None) -> Path | None:
+    """A finished download of this section from an earlier job (same file size, same quality)."""
+    e = _downloads(folder).get(kind)
+    if not e:
+        return None
+    f = folder / e["file"]
+    if not f.exists() or f.stat().st_size != e.get("size"):
+        return None
+    if quality and e.get("quality") != quality:
+        return None
+    return f
+
+
 def run_job(p: JobParams, cb: Callbacks) -> JobResult:
     t0 = time.time()
     if p.end - p.start < 2:
         raise JobError("Pick a section at least a few seconds long.")
 
     two_step = p.method == "two-step"
-    audio_only = not p.burn            # no video needed: download just the audio (much smaller)
-    stages = ["Reading VOD info", "Downloading audio" if audio_only else "Downloading section", "Loading Whisper"]
+    need_video = p.burn
+    stages = ["Reading VOD info", "Downloading audio", "Loading Whisper"]
     if p.isolate:
         stages.append("Isolating voices")
     stages.append("Detecting language")
@@ -557,8 +701,10 @@ def run_job(p: JobParams, cb: Callbacks) -> JobResult:
         stages.append("Translating to English")
         if p.want_original:
             stages.append("Transcribing original language")
-    if p.burn:
-        stages.append("Burning subtitles into video")
+    if p.speakers:
+        stages.append("Telling speakers apart")
+    if need_video:
+        stages += ["Downloading video", "Burning subtitles into video"]
     n = len(stages)
     step = 0
 
@@ -579,156 +725,242 @@ def run_job(p: JobParams, cb: Callbacks) -> JobResult:
     dur = end - start
     check()
 
-    base = f"{_safe(info.channel)}_{info.id or 'vod'}_{format_hms_tag(start)}-{format_hms_tag(end)}"
+    base = f"{_safe(info.channel)}_{_safe(info.id) or 'vod'}_{format_hms_tag(start)}-{format_hms_tag(end)}"
     folder = Path(p.out_dir) / base
     folder.mkdir(parents=True, exist_ok=True)
-    clip = folder / f"{base}.{'m4a' if audio_only else 'mp4'}"
+    audio_file = folder / f"{base}.m4a"
+    video_file = folder / f"{base}.mp4"
     cb.log(f"Saving to {folder}")
+
+    # The video downloads in the background while Whisper works on the sound.
+    stop_video = threading.Event()
+    video_err: list[BaseException] = []
+    vprog = [0.0]
+    video_thread = None
+    have_video = _cached(folder, "video", p.quality) if need_video else None
+    if need_video and have_video:
+        cb.log(f"Reusing the {p.quality} video downloaded earlier.")
+    elif need_video:
+        def _video():
+            try:
+                download_section(info, p.quality, start, end, video_file, lambda f: vprog.__setitem__(0, f),
+                                 _Either(cb.cancel, stop_video))
+                _remember_download(folder, "video", video_file, p.quality)
+            except BaseException as e:          # noqa: BLE001 - reported when the job needs the video
+                video_err.append(e)
+        video_thread = threading.Thread(target=_video, daemon=True)
+        video_thread.start()
 
     # champions and player names, read off the video while it downloads
     details: dict = {}
     det_thread = None
+    det_file = folder / "details.json"
     if p.auto_details and p.use_glossary:
-        def _detect():
-            try:
-                from .detect import game_details
-                details.update(game_details(info, start, end, cb.cancel))
-            except Exception as e:
-                details["error"] = str(e)
-        det_thread = threading.Thread(target=_detect, daemon=True)
-        det_thread.start()
-
-    stage(stages[1])
-    what = "audio only (no video needed)" if audio_only else p.quality
-    cb.log(f"Downloading {format_ts(start)} - {format_ts(end)} ({format_ts(dur)}), {what}...")
-    download_section(info, p.quality, start, end, clip, cb.progress, cb.cancel, audio_only=audio_only)
-
-    thumb = folder / "thumb.jpg"
-    try:
-        if audio_only:
-            thumb.write_bytes(grab_frame(info, start + dur * 0.3, 480))
-        else:
-            subprocess.run([ffmpeg_exe(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-ss",
-                            f"{dur * 0.3:.1f}", "-i", str(clip), "-frames:v", "1", "-vf", "scale=480:-2", str(thumb)],
-                           capture_output=True, creationflags=NO_WINDOW)
-    except Exception:
-        pass
-
-    stage("Loading Whisper")
-    if not model_is_downloaded(p.model):
-        cb.log(f"First run: downloading the Whisper {p.model} model. This only happens once.")
-    model = load_model(p.model, cb.log)
-    check()
-
-    if p.isolate:
-        stage("Isolating voices")
-        from . import isolate
-        if not isolate.model_ready():
-            cb.log("First use: downloading the voice isolation model (66 MB).")
-            isolate.download_model(cb.progress)
+        import json
         try:
-            audio = isolate.voice_16k_from_file(clip, cb.progress, cb.cancel)
-            cb.log(f"Game sound and music removed ({isolate.device()}).")
-        finally:
-            isolate.release()     # give the GPU memory back to Whisper
-    else:
-        audio = decode_audio(clip)
-    audio_dur = len(audio) / 16000 or dur
+            details.update(json.loads(det_file.read_text(encoding="utf-8")))      # read on an earlier run
+        except (OSError, ValueError):
+            def _detect():
+                try:
+                    from .detect import game_details
+                    found = game_details(info, start, end, cb.cancel)
+                    details.update(found)
+                    if not cb.cancel.is_set():
+                        det_file.write_text(json.dumps(found, ensure_ascii=False), encoding="utf-8")
+                except Exception as e:
+                    details["error"] = str(e)
+            det_thread = threading.Thread(target=_detect, daemon=True)
+            det_thread.start()
 
-    stage("Detecting language")
-    if p.language:
-        lang, prob = p.language, 1.0
-        cb.log(f"Language set manually: {lang_name(lang)}")
-    else:
-        lang, prob, _ = detect_language(model, audio, cb.log)
-        cb.log(f"Detected language: {lang_name(lang)} ({prob:.0%})")
-        if prob < 0.5:
-            cb.log("Low confidence. If the result looks wrong, pick the language manually and run again.")
-    check()
+    try:
+        stage("Downloading audio")
+        if _cached(folder, "audio"):
+            cb.log("Reusing the audio downloaded earlier.")
+        else:
+            cb.log(f"Downloading {format_ts(start)} - {format_ts(end)} ({format_ts(dur)}): sound first"
+                   + (f", the {p.quality} video in the background." if video_thread else "."))
+            download_section(info, p.quality, start, end, audio_file, cb.progress, cb.cancel, audio_only=True)
+            _remember_download(folder, "audio", audio_file)
 
-    from .glossary import Glossary
-    gl = Glossary.get()
-    if det_thread:
-        det_thread.join(timeout=20)          # don't hold up a short clip; long ones finish downloading first
-        if det_thread.is_alive():
-            cb.log("Still reading champions/players from the video; skipping that for this clip.")
+        thumb = folder / "thumb.jpg"
+        if not thumb.exists():
+            try:
+                thumb.write_bytes(grab_frame(info, start + dur * 0.3, 480))
+            except Exception:
+                pass
+
+        stage("Loading Whisper")
+        if not model_is_downloaded(p.model):
+            cb.log(f"First run: downloading the Whisper {p.model} model. This only happens once.")
+        model = load_model(p.model, cb.log)
+        check()
+
+        raw = decode_audio(audio_file)
+        if p.isolate:
+            stage("Isolating voices")
+            from . import isolate
+            if not isolate.model_ready():
+                cb.log("First use: downloading the voice isolation model (66 MB).")
+                isolate.download_model(cb.progress)
+            try:
+                audio = isolate.voice_16k_from_file(audio_file, cb.progress, cb.cancel)
+                cb.log(f"Game sound and music removed ({isolate.device()}).")
+            finally:
+                isolate.release()     # give the GPU memory back to Whisper
+        else:
+            audio = raw
+        audio_dur = len(audio) / 16000 or dur
+
+        stage("Detecting language")
+        if p.language:
+            lang, prob = p.language, 1.0
+            cb.log(f"Language set manually: {lang_name(lang)}")
+        else:
+            lang, prob, _ = detect_language(model, audio, cb.log)
+            cb.log(f"Detected language: {lang_name(lang)} ({prob:.0%})")
+            if prob < 0.5:
+                cb.log("Low confidence. If the result looks wrong, pick the language manually and run again.")
+        check()
+
+        from .glossary import Glossary
+        gl = Glossary.get()
+        if det_thread:
+            det_thread.join(timeout=20)          # don't hold up a short clip; long ones finish downloading first
+            if det_thread.is_alive():
+                cb.log("Still reading champions/players from the video; skipping that for this clip.")
         if details.get("champions") or details.get("players"):
             cb.log("Read from the game: " + ", ".join(details.get("champions", []) + details.get("players", [])))
-    champs = list(dict.fromkeys(list(p.champions) + details.get("champions", [])))
-    names = details.get("players", [])
-    fix_en = (lambda t: gl.fix(t, english=True, extra=names)) if p.use_glossary else None
-    fix_orig = (lambda t: gl.fix(t, english=False, extra=names)) if p.use_glossary else None
+        champs = list(dict.fromkeys(list(p.champions) + details.get("champions", [])))
+        names = details.get("players", [])
+        fix_en = (lambda t: gl.fix(t, english=True, extra=names)) if p.use_glossary else None
+        fix_orig = (lambda t: gl.fix(t, english=False, extra=names)) if p.use_glossary else None
 
-    from . import translate
-    if two_step and lang != "en" and not translate.supported(lang):
-        cb.log(f"The text translator doesn't cover {lang_name(lang)}, so Whisper translates directly.")
-        two_step = False
+        from . import translate
+        if two_step and lang != "en" and not translate.supported(lang):
+            cb.log(f"The text translator doesn't cover {lang_name(lang)}, so Whisper translates directly.")
+            two_step = False
 
-    original: list[Segment] | None = None
-    fixes = 0
-    if two_step:
-        stage("Transcribing speech")
-        hot = gl.hotwords(champs, core=False, extra=names) if p.use_glossary else None
-        original, _ = run_whisper(model, audio, audio_dur, lang, "transcribe", cb.progress,
-                                  lambda s: cb.segment(s, "orig"), cb.cancel, hotwords=hot, fixer=fix_orig)
-        check()
-        stage("Translating to English")
-        if lang == "en":
-            english, original = original, None
-        else:
-            tr = translate.Translator.get(p.translator, cb.log)
-            outs = tr.translate([s.text for s in original], lang)
-            english = []
-            for i, (s, t) in enumerate(zip(original, outs)):
-                if fix_en:
-                    t, k = fix_en(t)
-                    fixes += k
-                seg = Segment(s.start, s.end, t)
-                english.append(seg)
-                cb.segment(seg, "en")
-            cb.progress(1.0)
-            cb.log(f"Translated by Whisper {p.model} + NLLB {'1.3B' if tr.size == 'better' else '600M'} ({tr.device}).")
-    else:
-        hot = gl.hotwords(champs, extra=names) if p.use_glossary else None
-        if hot:
-            cb.log(f"League glossary on ({len(hot.split(','))} terms in Whisper's prompt).")
-        stage("Translating to English")
-        task = "transcribe" if lang == "en" else "translate"
-        if lang == "en":
-            cb.log("Speech is already English, so it's transcribed without translating.")
-        english, fixes = run_whisper(model, audio, audio_dur, lang, task, cb.progress,
-                                     lambda s: cb.segment(s, "en"), cb.cancel, hotwords=hot, fixer=fix_en)
-        if p.want_original:
-            stage("Transcribing original language")
+        original: list[Segment] | None = None
+        fixes = slang = 0
+        if two_step:
+            stage("Transcribing speech")
+            hot = gl.hotwords(champs, core=False, extra=names) if p.use_glossary else None
             original, _ = run_whisper(model, audio, audio_dur, lang, "transcribe", cb.progress,
-                                      lambda s: cb.segment(s, "orig"), cb.cancel, fixer=fix_orig)
-    cb.log(f"{len(english)} English lines." + (f" Glossary fixed {fixes} terms." if fixes else ""))
+                                      lambda s: cb.segment(s, "orig"), cb.cancel, hotwords=hot, fixer=fix_orig)
+            check()
+            stage("Translating to English")
+            if lang == "en":
+                english, original = original, None
+            else:
+                tr = translate.Translator.get(p.translator, cb.log)
+                src = []
+                for s in original:
+                    t, k = gl.prepare(s.text, lang) if p.use_glossary else (s.text, 0)
+                    slang += k
+                    src.append(t)
+                outs = tr.translate(src, lang)
+                english = []
+                for s, t in zip(original, outs):
+                    if fix_en:
+                        t, k = fix_en(t)
+                        fixes += k
+                    seg = Segment(s.start, s.end, t)
+                    english.append(seg)
+                    cb.segment(seg, "en")
+                cb.progress(1.0)
+                cb.log(f"Translated by Whisper {p.model} + NLLB {'1.3B' if tr.size == 'better' else '600M'} ({tr.device}).")
+        else:
+            hot = gl.hotwords(champs, extra=names) if p.use_glossary else None
+            if hot:
+                cb.log(f"League glossary on ({len(hot.split(','))} terms in Whisper's prompt).")
+            stage("Translating to English")
+            task = "transcribe" if lang == "en" else "translate"
+            if lang == "en":
+                cb.log("Speech is already English, so it's transcribed without translating.")
+            english, fixes = run_whisper(model, audio, audio_dur, lang, task, cb.progress,
+                                         lambda s: cb.segment(s, "en"), cb.cancel, hotwords=hot, fixer=fix_en)
+            if p.want_original:
+                stage("Transcribing original language")
+                original, _ = run_whisper(model, audio, audio_dur, lang, "transcribe", cb.progress,
+                                          lambda s: cb.segment(s, "orig"), cb.cancel, fixer=fix_orig)
+        cb.log(f"{len(english)} English lines." + (f" Glossary fixed {fixes} terms." if fixes else "")
+               + (f" {slang} slang phrases explained before translating." if slang else ""))
 
-    if original and lang != "en":
-        write_srt(original, folder / f"{base}.{lang}.srt")
-    srt = folder / f"{base}.en.srt"
-    write_srt(english, srt)
-    transcript = folder / f"{base}.transcript.txt"
-    write_transcript(transcript, info, start, end, lang, prob, p.model, english,
-                     original if (p.want_original or two_step) and lang != "en" else None)
+        n_speakers = 1
+        if p.speakers and english:
+            stage("Telling speakers apart")
+            from . import speakers
+            if not speakers.model_ready():
+                cb.log("First use: downloading the speaker model (26 MB).")
+                speakers.download_model(cb.progress)
+            ids = speakers.label(audio, [(s.start, s.end) for s in english], cb.progress, cb.cancel)
+            for s, k in zip(english, ids):
+                s.speaker = k
+            if original and len(original) == len(english):
+                for s, k in zip(original, ids):
+                    s.speaker = k
+            n_speakers = len(set(ids))
+            cb.log(f"{n_speakers} speakers." + (" Others are shown in colour; the main speaker in white."
+                                                if n_speakers > 1 else " Everything was said by one person."))
+            if n_speakers == 1:
+                for s in english + (original or []):
+                    s.speaker = 0
 
-    meta = {"vod_url": info.url, "vod_id": info.id, "title": info.title, "channel": info.channel,
-            "start": start, "end": end, "language": lang, "probability": prob, "model": p.model,
-            "method": "two-step" if two_step else "whisper", "translator": p.translator if two_step else None,
-            "position": p.position, "size": p.font_size, "lines": len(english), "created": time.time(),
-            "clip": clip.name, "audio_only": audio_only, "srt": srt.name, "transcript": transcript.name,
-            "thumb": thumb.name if thumb.exists() else None, "subbed": None,
-            "champions": champs, "players": names}
-    write_meta(folder, meta)
+        # The video can start a few seconds before the requested time (it has to begin on a keyframe).
+        # Find how much earlier by matching its sound against the audio we transcribed.
+        shift = 0.0
+        if need_video:
+            stage("Downloading video")
+            if video_thread:
+                if video_thread.is_alive():
+                    cb.log("Waiting for the video download to finish…")
+                while video_thread.is_alive():
+                    cb.progress(vprog[0])
+                    check()
+                    video_thread.join(timeout=0.3)
+                if video_err:
+                    raise video_err[0]
+            cb.progress(1.0)
+            try:
+                shift = round(audio_offset(raw, decode_audio(video_file)), 3)
+            except JobError:
+                shift = 0.0
+            if abs(shift) >= 0.05:
+                cb.log(f"The video starts {abs(shift):.1f} s {'earlier' if shift > 0 else 'later'}; subtitles moved to match.")
+            else:
+                shift = 0.0
 
-    subbed = None
-    if p.burn:
-        stage("Burning subtitles into video")
-        subbed = folder / f"{base}.subbed.mp4"
-        burn_subtitles(clip, srt, subbed, p.position, p.font_size, audio_dur,
-                       cb.progress, cb.log, cb.cancel)
-        meta["subbed"] = subbed.name
+        if original and lang != "en":
+            write_srt(original, folder / f"{base}.{lang}.srt", shift)
+        srt = folder / f"{base}.en.srt"
+        write_srt(english, srt, shift)
+        transcript = folder / f"{base}.transcript.txt"
+        write_transcript(transcript, info, start, end, lang, prob, p.model, english,
+                         original if (p.want_original or two_step) and lang != "en" else None, clip_shift=shift)
+
+        clip = video_file if need_video else audio_file
+        meta = {"vod_url": info.url, "vod_id": info.id, "site": info.site, "title": info.title, "channel": info.channel,
+                "start": start, "end": end, "language": lang, "probability": prob, "model": p.model,
+                "method": "two-step" if two_step else "whisper", "translator": p.translator if two_step else None,
+                "position": p.position, "size": p.font_size, "lines": len(english), "created": time.time(),
+                "clip": clip.name, "audio_only": not need_video, "srt": srt.name, "transcript": transcript.name,
+                "thumb": thumb.name if thumb.exists() else None, "subbed": None, "shift": shift,
+                "speakers": n_speakers, "champions": champs, "players": names}
         write_meta(folder, meta)
+
+        subbed = None
+        if need_video:
+            stage("Burning subtitles into video")
+            subbed = folder / f"{base}.subbed.mp4"
+            burn_subtitles(video_file, srt, subbed, p.position, p.font_size, audio_dur + shift,
+                           cb.progress, cb.log, cb.cancel)
+            meta["subbed"] = subbed.name
+            write_meta(folder, meta)
+    finally:
+        if video_thread and video_thread.is_alive():
+            stop_video.set()                  # the job failed or was cancelled: stop the background download
+            video_thread.join(timeout=5)
+            video_file.unlink(missing_ok=True)
 
     cb.progress(1.0)
     return JobResult(folder, clip, srt, transcript, subbed, lang, prob, len(english), time.time() - t0, meta)
@@ -746,6 +978,9 @@ def read_meta(folder: Path) -> dict:
     return json.loads((Path(folder) / "job.json").read_text(encoding="utf-8"))
 
 
+_FONT = re.compile(r'<font color="(#[0-9A-Fa-f]{6})">(.*)</font>', re.S)
+
+
 def read_srt(path: Path) -> list[dict]:
     cues = []
     blocks = re.split(r"\n\s*\n", Path(path).read_text(encoding="utf-8-sig").replace("\r\n", "\n").strip())
@@ -756,9 +991,14 @@ def read_srt(path: Path) -> list[dict]:
             m = rx.search(ln)
             if m:
                 g = [int(x) for x in m.groups()]
-                cues.append({"start": g[0] * 3600 + g[1] * 60 + g[2] + g[3] / 1000,
-                             "end": g[4] * 3600 + g[5] * 60 + g[6] + g[7] / 1000,
-                             "text": "\n".join(lines[i + 1:]).strip()})
+                text = "\n".join(lines[i + 1:]).strip()
+                fm = _FONT.fullmatch(text)          # a speaker colour: kept separately so the editor shows plain text
+                cue = {"start": g[0] * 3600 + g[1] * 60 + g[2] + g[3] / 1000,
+                       "end": g[4] * 3600 + g[5] * 60 + g[6] + g[7] / 1000,
+                       "text": fm.group(2).strip() if fm else text}
+                if fm:
+                    cue["color"] = fm.group(1)
+                cues.append(cue)
                 break
     return cues
 
@@ -768,7 +1008,10 @@ def write_srt_cues(cues: list[dict], path: Path):
     keep = [c for c in sorted(cues, key=lambda c: c["start"]) if (c.get("text") or "").strip()]
     out = []
     for i, c in enumerate(keep, 1):
-        out += [str(i), f"{srt_ts(c['start'])} --> {srt_ts(max(c['end'], c['start'] + 0.2))}", c["text"].strip(), ""]
+        text = c["text"].strip()
+        if c.get("color"):
+            text = f'<font color="{c["color"]}">{text}</font>'
+        out += [str(i), f"{srt_ts(c['start'])} --> {srt_ts(max(c['end'], c['start'] + 0.2))}", text, ""]
     Path(path).write_text("\n".join(out), encoding="utf-8")
 
 

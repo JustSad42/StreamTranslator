@@ -134,6 +134,9 @@ async function boot() {
   initClip(); initLive(); initGlossary(); initSettings(); initHistory(); initEditor();
   initSetup(r.components, r.setup_needed && !r.settings.setup_done || (r.components && !r.components.gpu.ok && r.components.has_nvidia));
   if (r.queue && r.queue.length) renderQueue(r.queue);
+  if (r.whats_new) showWhatsNew(r.whats_new);
+  if (r.crashed) actionToast('StreamTranslator closed unexpectedly last time. Sending a report helps get it fixed.', 'warn',
+    [['Report', () => reportProblem('The app closed unexpectedly')], ['Open logs', () => api('app.logs')]]);
   if (!r.ffmpeg) toast('ffmpeg was not found. Install it with:  winget install Gyan.FFmpeg', 'bad', 15000);
   S.model.name = r.model.name;
   modelChip(r.model.device ? { state: 'ready', name: r.model.name, device: r.model.device } : { state: S.settings.preload ? 'loading' : 'idle', name: r.model.name });
@@ -172,7 +175,7 @@ function initClip() {
   srcMode = seg($('#srcMode'), v => $$('#sourceCard .mode-pane').forEach(p => p.classList.toggle('on', p.dataset.mode === v)));
   $('#theirLoad').onclick = () => loadSource($('#theirInput').value);
   $('#theirInput').addEventListener('keydown', e => { if (e.key === 'Enter') loadSource(e.target.value); });
-  $('#theirInput').addEventListener('paste', () => setTimeout(() => { const v = $('#theirInput').value.trim(); if (/twitch\.tv\/videos\/\d+|^\d{8,}$/.test(v)) loadSource(v); }, 30));
+  $('#theirInput').addEventListener('paste', () => setTimeout(() => { const v = $('#theirInput').value.trim(); if (VOD_RX.test(v) || /^\d{8,}$/.test(v)) loadSource(v); }, 30));
 
   // options
   const st = S.settings;
@@ -188,6 +191,7 @@ function initClip() {
   $('#glossClip').checked = st.use_glossary; $('#glossClip').onchange = e => setSetting('use_glossary', e.target.checked);
   methodSeg = seg($('#methodSeg'), v => { setSetting('method', v); syncTurbo(); }); methodSeg.set(st.method || 'two-step');
   $('#autoClip').checked = st.auto_details; $('#autoClip').onchange = e => setSetting('auto_details', e.target.checked);
+  $('#spkClip').checked = !!st.speakers; $('#spkClip').onchange = e => setSetting('speakers', e.target.checked);
   syncTurbo();
   $('#isoClip').checked = st.isolate; $('#isoClip').onchange = e => setSetting('isolate', e.target.checked);
   $('#snapBtn').onclick = runSnap;
@@ -218,7 +222,7 @@ function initClip() {
 async function checkClipboard() {
   try {
     const txt = (await api('os.clipboard')) || '';
-    const m = txt.match(/https?:\/\/(?:www\.)?twitch\.tv\/videos\/\d+\S*/);
+    const m = txt.match(VOD_RX);
     const hint = $('#clipHint');
     if (!m || m[0] === S.clipSeen || (S.vod && m[0].includes(S.vod.id))) return;
     hint.innerHTML = ''; hint.append(h('span', {}, 'Link on your clipboard:'), h('b', {}, m[0].replace(/^https?:\/\/(www\.)?/, '')),
@@ -261,7 +265,7 @@ function setVod(v, range) {
   setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
   if (v.url_start != null && !range) toast(`Start set from the link: ${fmt(v.url_start)}`, 'good', 3000);
 }
-const twitchAt = t => S.vod && /twitch\.tv/.test(S.vod.url) ? `https://www.twitch.tv/videos/${S.vod.id}?t=${hmsTag(t)}` : S.vod.url;
+const twitchAt = t => S.vod ? vodAt(S.vod.url, S.vod.id, t) : '';
 
 /* ---------- timeline ---------- */
 const xOf = t => (t - S.tl.v0) / (S.tl.v1 - S.tl.v0) * 100;
@@ -484,16 +488,25 @@ function jobParams(vod, lo, hi) {
   return { url: vod.url, vod_id: vod.id, start: lo, end: hi, out_dir: S.settings.out_dir, quality: qualSeg.get(), model: modelSeg.get(),
     language: $('#langSel').value, orig: $('#origTog').checked, burn: $('#burnTog').checked, position: $('#posPick .on').dataset.v,
     size: sizeSeg.get(), champions: champsClip.get(), use_glossary: $('#glossClip').checked, isolate: $('#isoClip').checked,
-    method: methodSeg.get(), auto_details: $('#autoClip').checked,
+    method: methodSeg.get(), auto_details: $('#autoClip').checked, speakers: $('#spkClip').checked,
     label: `${vod.channel} · ${fmt(lo)}–${fmt(hi)}` };
 }
+// Twitch, YouTube and Kick VOD links (for paste/clipboard detection) and "open at this moment" links
+const VOD_RX = /https?:\/\/(?:www\.|m\.)?(?:twitch\.tv\/videos\/\d+|youtube\.com\/(?:watch\?\S*v=|live\/)[\w-]{11}|youtu\.be\/[\w-]{11}|kick\.com\/[\w-]+\/videos?\/[0-9a-f-]{36})\S*/i;
+function vodAt(url, id, t) {
+  url = url || ''; t = Math.max(0, Math.floor(t || 0));
+  if (/twitch\.tv/.test(url) && id) return `https://www.twitch.tv/videos/${id}?t=${hmsTag(t)}`;
+  if (/youtu\.?be/.test(url) && id) return `https://www.youtube.com/watch?v=${id}&t=${t}s`;
+  return url;
+}
 function stepsFor(p) {
-  const s = ['Reading VOD info', p.burn ? 'Downloading section' : 'Downloading audio', 'Loading Whisper'];
+  const s = ['Reading VOD info', 'Downloading audio', 'Loading Whisper'];
   if (p.isolate) s.push('Isolating voices');
   s.push('Detecting language');
   if (p.method === 'two-step') s.push('Transcribing speech', 'Translating to English');
   else { s.push('Translating to English'); if (p.orig) s.push('Transcribing original language'); }
-  if (p.burn) s.push('Burning subtitles into video');
+  if (p.speakers) s.push('Telling speakers apart');
+  if (p.burn) s.push('Downloading video', 'Burning subtitles into video');
   return s;
 }
 async function queueJobs(list) {
@@ -569,7 +582,7 @@ function lineEl(x, l) {
   if (l.log) return h('div', { class: 'line log' }, l.text);
   const at = (x.start || 0) + l.start;
   return h('div', { class: 'line' + (l.kind === 'orig' ? ' orig' : '') },
-    h('span', { class: 'ts', title: 'Open on Twitch at this moment', onclick: () => api('os.url', { url: /twitch\.tv/.test(x.url || '') ? `https://www.twitch.tv/videos/${x.vodId}?t=${hmsTag(at)}` : x.url }) }, fmt(at)),
+    h('span', { class: 'ts', title: 'Open the VOD at this moment', onclick: () => api('os.url', { url: vodAt(x.url, x.vodId, at) }) }, fmt(at)),
     h('div', { class: 'tx' }, l.text));
 }
 function addLine(id, l) {
@@ -614,7 +627,8 @@ on('clip.done', m => {
 });
 on('clip.error', m => {
   const x = J(m.job); x.error = m.message; addLine(m.job, { log: true, text: m.message });
-  toast(m.message.split('\n').slice(0, 6).join('\n'), 'bad', 10000);
+  if (m.report) actionToast(m.message.split('\n')[0], 'bad', [['Report', () => reportProblem(`A translation failed: ${m.message.split('\n')[0]}`)]]);
+  else toast(m.message.split('\n').slice(0, 6).join('\n'), 'bad', 10000);
   if (S.viewJob === m.job) viewJob(m.job);
   onBurnDone(null, m);
 });
@@ -744,13 +758,31 @@ function renderWall() {
 }
 const saveGloss = debounce(async () => {
   const fixes = {}; $$('#fixTable .fix-row').forEach(r => { const [a, b] = $$('input', r).map(x => x.value.trim()); if (a && b) fixes[a] = b; });
-  try { const g = await api('glossary.save', { data: { enabled: $('#glossOn').checked, use_core_terms: $('#coreOn').checked, custom_words: customWords.get(), fixes } }); S.gloss = g; tryIt(); }
+  const slang = {}; $$('#slangTable .fix-row').forEach(r => { const [a, b] = $$('input', r).map(x => x.value.trim()); if (a && b) slang[a] = b; });
+  try { const g = await api('glossary.save', { data: { enabled: $('#glossOn').checked, use_core_terms: $('#coreOn').checked, custom_words: customWords.get(), fixes, slang, use_slang: $('#slangOn').checked } }); S.gloss = g; tryIt(); }
   catch (e) { toast(e.message, 'bad'); }
 }, 450);
-function fixRow(a = '', b = '') {
-  const row = h('div', { class: 'fix-row' }, h('input', { value: a, placeholder: 'wrong', oninput: saveGloss }), h('span', { class: 'arrow' }, '→'),
-    h('input', { value: b, placeholder: 'right', oninput: saveGloss }), h('button', { title: 'Remove', onclick: () => { row.remove(); saveGloss(); } }, '×'));
+function fixRow(a = '', b = '', ph = ['wrong', 'right']) {
+  const row = h('div', { class: 'fix-row' }, h('input', { value: a, placeholder: ph[0], oninput: saveGloss }), h('span', { class: 'arrow' }, '→'),
+    h('input', { value: b, placeholder: ph[1], oninput: saveGloss }), h('button', { title: 'Remove', onclick: () => { row.remove(); saveGloss(); } }, '×'));
   return row;
+}
+const SLANG_PH = ['phrase as they say it (any language)', 'what it means, in English'];
+function initSlang() {
+  const g = S.gloss;
+  $('#slangOn').checked = g.use_slang !== false; $('#slangOn').onchange = saveGloss;
+  $('#slangCount').textContent = g.builtin_slang ? `${g.builtin_slang} common phrases are built in (Spanish, Portuguese, French, German); add your own below.` : '';
+  Object.entries(g.slang || {}).forEach(([a, b]) => $('#slangTable').append(fixRow(a, b, SLANG_PH)));
+  $('#addSlang').onclick = () => { const r = fixRow('', '', SLANG_PH); $('#slangTable').append(r); $('input', r).focus(); };
+  $('#slangTest').onclick = async () => {
+    const b = $('#slangTest'), out = $('#slangOut'); b.classList.add('busy'); out.textContent = 'Translating… (the first time loads the translator)';
+    try {
+      const r = await api('glossary.slang_test', { text: $('#slangIn').value, lang: $('#slangLang').value });
+      out.innerHTML = '';
+      out.append(h('div', { class: 'muted small' }, 'Without slang help: ' + r.plain),
+        h('div', {}, h('b', {}, 'With: '), r.helped), r.changes ? h('span', { class: 'n' }, `${r.changes} phrase${r.changes > 1 ? 's' : ''} explained`) : h('span', { class: 'n' }, 'no slang found'));
+    } catch (e) { out.textContent = e.message; } finally { b.classList.remove('busy'); }
+  };
 }
 const tryIt = debounce(async () => {
   const text = $('#tryIn').value; const out = $('#tryOut');
@@ -768,6 +800,7 @@ function initGlossary() {
   Object.entries(S.gloss.fixes || {}).forEach(([a, b]) => $('#fixTable').append(fixRow(a, b)));
   if (!Object.keys(S.gloss.fixes || {}).length) $('#fixTable').append(h('div', { class: 'empty' }, 'No fixes yet. Add one when Whisper keeps getting a word wrong.'));
   $('#addFix').onclick = () => { const e = $('#fixTable .empty'); if (e) e.remove(); const r = fixRow(); $('#fixTable').append(r); $('input', r).focus(); };
+  initSlang();
   $('#glossOn').onchange = saveGloss; $('#coreOn').onchange = () => { $('#termCloud').classList.toggle('off', !$('#coreOn').checked); saveGloss(); };
   $('#tryIn').oninput = tryIt; tryIt();
   $('#champFilter').oninput = renderWall;
@@ -795,6 +828,11 @@ function initSettings() {
     try { showAppUpdate(await api('appupdate.check'), true); } catch (e) { toast(e.message, 'bad'); } finally { b.classList.remove('busy'); }
   };
   showAppUpdate(S.appUpdate);
+  const prev = st.updated_from;
+  $('#rollRow').hidden = !prev; if (prev) $('#rollText').textContent = `Updated from ${prev}. Problems with this version?`;
+  $('#rollBtn').onclick = rollBack;
+  $('#reportBtn').onclick = () => reportProblem();
+  $('#logsBtn').onclick = () => api('app.logs');
   $('#modelChip').onclick = () => showPage('settings');
   scaleSeg = seg($('#scaleSeg'), v => api('ui.scale', { value: v === 'auto' ? 'auto' : +v }));
   showScale(S.scale.value, st.ui_scale, S.scale.auto);
@@ -811,7 +849,7 @@ function renderAbout() {
   const a = $('#about'); if (!a) return;
   a.innerHTML = '';
   [['GPU', S.gpu || 'none found (CPU mode)'], ['Whisper', `${S.model.name} · ${S.model.state === 'ready' ? 'loaded on ' + S.model.device : S.model.state}`],
-   ['Glossary', S.gloss ? `${S.champs.length} champions, ${(S.gloss.custom_words || []).length} custom words` : '—'], ['Shortcuts', 'Ctrl+1–4 switch tabs · Ctrl+Enter translate']]
+   ['Glossary', S.gloss ? `${S.champs.length} champions, ${(S.gloss.custom_words || []).length} custom words` : '—'], ['Shortcuts', 'Ctrl+1–5 switch tabs · Ctrl+Enter translate']]
     .forEach(([k, v]) => a.append(h('span', {}, k), h('b', {}, v)));
 }
 
@@ -838,6 +876,49 @@ function showUpdate(u, manual) {
   else t.textContent = `yt-dlp ${u.current || u.latest || '?'} · up to date`;
   if (manual && !u.error) toast(u.updated ? `Downloaded yt-dlp ${u.latest}. It's used next time you open the app.` : 'yt-dlp is up to date', 'good', 3000);
 }
+/* problems, what's new, going back */
+function actionToast(msg, kind, actions, ms = 0) {
+  const t = h('div', { class: 'toast upd-card ' + kind }, h('div', { class: 'upd-body' }, h('div', {}, msg),
+    h('div', { class: 'row upd-btns' }, ...actions.map(([label, fn]) => h('button', { class: 'btn ghost sm', onclick: () => { t.remove(); fn(); } }, label)),
+      h('button', { class: 'btn ghost sm', onclick: () => t.remove() }, 'Dismiss'))));
+  $('#toasts').append(t);
+  if (ms) setTimeout(() => t.remove(), ms);
+}
+function reportProblem(what = '') {
+  api('app.report', { what }).then(() => toast('A GitHub issue opened in your browser with the version and recent log filled in. Check it, then submit.', 'good', 7000))
+    .catch(e => toast(e.message, 'bad'));
+}
+function mdLite(md) {
+  // release notes: paragraphs, "- " bullets, **bold**, `code`
+  const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
+  let html = '', list = false;
+  for (const raw of (md || '').split('\n')) {
+    const line = raw.trim();
+    if (/^[-*] /.test(line)) { if (!list) { html += '<ul>'; list = true; } html += `<li>${inline(line.slice(2))}</li>`; continue; }
+    if (list) { html += '</ul>'; list = false; }
+    if (/^#+ /.test(line)) html += `<h4>${inline(line.replace(/^#+ /, ''))}</h4>`;
+    else if (line) html += `<p>${inline(line)}</p>`;
+  }
+  return html + (list ? '</ul>' : '');
+}
+function showWhatsNew(w) {
+  $('#newsTitle').textContent = `What's new in ${w.version}`;
+  $('#newsFrom').textContent = `Updated from ${w.from}. Your settings, history and downloads are kept.`;
+  $('#newsNotes').innerHTML = w.notes ? mdLite(w.notes) : '<p class="muted">No release notes for this version.</p>';
+  $('#newsBack').hidden = !S.settings.updated_from;
+  $('#newsBack').onclick = () => { $('#whatsNew').hidden = true; rollBack(); };
+  $('#newsClose').onclick = () => { $('#whatsNew').hidden = true; };
+  $('#whatsNew').hidden = false;
+}
+async function rollBack() {
+  const prev = S.settings.updated_from; if (!prev) return;
+  if (!confirm(`Go back to version ${prev}? The app closes, installs ${prev} and reopens. Your settings and history are kept.`)) return;
+  const b = $('#rollBtn'); b.disabled = true; b.textContent = 'Downloading…';
+  try { await api('appupdate.rollback'); b.textContent = 'Installing… the app will reopen'; }
+  catch (e) { toast(e.message, 'bad', 8000); b.disabled = false; b.textContent = 'Go back'; }
+}
+on('appupdate.progress', m => { const b = $('#rollBtn'); if (b && b.disabled && !m.installing) b.textContent = `Downloading… ${Math.round(m.f * 100)}%`; });
+
 /* app updates from GitHub releases */
 let appUpdCard = null, appUpdShown = '';
 function showAppUpdate(u, manual) {
@@ -853,7 +934,8 @@ function showAppUpdate(u, manual) {
   }
   if (manual && u.error) toast('Couldn\'t reach GitHub: ' + u.error, 'bad');
   else if (manual && !u.newer) toast(`You have the newest version (${u.current})`, 'good', 3000);
-  if (u.newer && (manual || appUpdShown !== u.latest)) appUpdPopup(u);
+  // after going back a version, don't pop up the version you left (Settings still offers it)
+  if (u.newer && (manual || (appUpdShown !== u.latest && S.settings.skip_version !== u.latest))) appUpdPopup(u);
 }
 function appUpdPopup(u) {
   appUpdShown = u.latest; if (appUpdCard) appUpdCard.remove();
@@ -1010,7 +1092,7 @@ function renderCues() { const list = $('#edList'); list.innerHTML = ''; ED.cues.
 function cueEl(c, i) {
   const s = h('input', { value: fmtMs(c.start), title: 'Start' }), e = h('input', { value: fmtMs(c.end), title: 'End' }), ta = h('textarea', { rows: 2 });
   ta.value = c.text;
-  const row = h('div', { class: 'cue' + (i === ED.sel ? ' sel' : ''), 'data-i': i }, h('div', { class: 'tm' }, s, e), ta, h('button', { class: 'del', title: 'Delete line' }, '✕'));
+  const row = h('div', { class: 'cue' + (i === ED.sel ? ' sel' : ''), 'data-i': i, style: c.color ? `box-shadow: inset 3px 0 0 ${c.color}` : null, title: c.color ? 'Another speaker (shown in this colour)' : null }, h('div', { class: 'tm' }, s, e), ta, h('button', { class: 'del', title: 'Delete line' }, '✕'));
   row.addEventListener('mousedown', ev => { if (ev.target.closest('.del')) return; selectCue(i, !['TEXTAREA', 'INPUT'].includes(ev.target.tagName)); });
   ta.addEventListener('focus', () => selectCue(i, false));
   ta.oninput = () => { c.text = ta.value; dirty(); };
@@ -1033,6 +1115,7 @@ function paintSub() {
   const v = $('#edVideo'), box = $('.ed-video'), sub = $('#edSub'); if (!box) return;
   const t = v.currentTime || 0; const c = ED.cues.find(c => t >= c.start && t < c.end);
   const text = c ? c.text : ''; if (sub.textContent !== text) sub.textContent = text;
+  sub.style.color = (c && c.color) || '';
   const H = box.clientHeight; const size = { Small: 12, Medium: 14, Large: 17 }[ED.size] || 14;
   const [align, margin] = { 'Above game HUD': [2, 46], Bottom: [2, 12], Top: [8, 14] }[ED.position] || [2, 46];
   sub.style.fontSize = (H * size / 288 * 1.1) + 'px';
@@ -1048,7 +1131,7 @@ function splitCue() {
   const c = needSel(); if (!c) return; const t = $('#edVideo').currentTime;
   if (t <= c.start + 0.2 || t >= c.end - 0.2) { toast('Move the playhead inside the selected line to split it.', 'warn', 2500); return; }
   const words = c.text.split(/\s+/); const k = clamp(Math.round(words.length * (t - c.start) / (c.end - c.start)), 1, Math.max(1, words.length - 1));
-  const second = { start: t, end: c.end, text: words.slice(k).join(' ') };
+  const second = { start: t, end: c.end, text: words.slice(k).join(' '), ...(c.color ? { color: c.color } : {}) };
   c.end = t; c.text = words.slice(0, k).join(' ');
   ED.cues.splice(ED.sel + 1, 0, second); dirty(); const keep = ED.sel + 1; renderCues(); selectCue(keep, false);
 }

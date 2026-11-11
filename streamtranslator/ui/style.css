@@ -488,3 +488,16 @@ body.dragging .drop-hint{opacity:1}
 .upd-prog[hidden]{display:none}
 .upd-prog i{display:block;height:100%;width:0;background:var(--grad);transition:width .3s}
 .upd-btns{gap:8px;margin-top:6px;flex-wrap:wrap}
+/* slang tester */
+.slang-try{margin-top:14px;display:flex;flex-direction:column;gap:8px}
+.slang-try .field-row{display:flex;gap:8px}
+.slang-try input{flex:1;min-width:0}
+.slang-try select{width:auto}
+/* what's new */
+.news-box{width:min(92vw,720px)}
+.news-notes{padding:6px 22px 22px;overflow-y:auto;font-size:14px;line-height:1.55;color:var(--text,#e8e8f0)}
+.news-notes ul{margin:6px 0 10px;padding-left:20px}
+.news-notes li{margin:4px 0}
+.news-notes h4{margin:14px 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.news-notes code{background:rgba(255,255,255,.07);padding:1px 5px;border-radius:5px}
+.slang-try .try-out:empty{display:none}

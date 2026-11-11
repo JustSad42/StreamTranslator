@@ -59,11 +59,31 @@ async def _ocr_async(png: bytes) -> list[str]:
 
 
 _ocr_lock = threading.Lock()
+_ocr_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _ocr_thread(ready: threading.Event):
+    """All Windows OCR calls run on this one thread, set up once for Windows Runtime (MTA).
+    Calling it from whichever worker thread happened to need it crashed the app now and then."""
+    global _ocr_loop
+    try:
+        from winrt import _winrt
+        _winrt.init_apartment(_winrt.MTA)
+    except Exception:
+        pass
+    _ocr_loop = asyncio.new_event_loop()
+    ready.set()
+    _ocr_loop.run_forever()
 
 
 def ocr(png: bytes) -> list[str]:
     with _ocr_lock:       # the Windows OCR engine handles one image at a time
-        return asyncio.run(_ocr_async(png))
+        if _ocr_loop is None:
+            ready = threading.Event()
+            threading.Thread(target=_ocr_thread, args=(ready,), daemon=True, name="windows-ocr").start()
+            ready.wait(10)
+        data = bytes(png)
+        return asyncio.run_coroutine_threadsafe(_ocr_async(data), _ocr_loop).result(timeout=30)
 
 
 def clock_values(lines: list[str]) -> list[int]:

@@ -355,6 +355,9 @@ class LiveSession:
     def _to_english(self, text: str, lang: str, beam: int) -> str:
         from .translate import Translator
         tr = Translator.get(self.translator, lambda s: self.emit("live.status", state="live", message=s))
+        if self.use_glossary:
+            from .glossary import Glossary
+            text, _ = Glossary.get().prepare(text, lang)
         return tr.translate([text], lang, beam=beam)[0]
 
     def _speech(self, chunk, lang: str, beam: int) -> tuple[str, str]:

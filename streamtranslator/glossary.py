@@ -72,6 +72,41 @@ TERM_FIXES = {
     "A.D.C.": "ADC", "Pentakil": "Pentakill", "Penta kill": "Pentakill",
 }
 
+# Gaming slang the text translator takes literally ("de menos a más" -> "from less to more").
+# Swapped for plain English before translating; NLLB keeps English words in a sentence as they are.
+# Keys are regexes (matched whole-word, any case).
+SLANG = {
+    "es": {
+        r"de menos a m[aá]s": "getting better", r"jugad[oó]n(?:azo)?": "great play", r"jugadas? de crack": "great play",
+        r"chetad[oa]s?": "overpowered", r"rot[oa]s?(?= (?:el|la|ese|esa|este|esta)\b)": "overpowered",
+        r"tilte(?:ad[oa]s?|o)": "tilted", r"tiltear(?:se)?": "tilt", r"(?:un|una) manc[oa]": "a bad player", r"manc[oa]s": "bad players", r"manc[oa]": "bad",
+        r"rushe(?:ar|a|amos|an)": "rush", r"farme(?:ar|a|ando|amos)": "farm", r"gankee?(?:ar|a|ó|o|ando)": "gank",
+        r"flashe(?:ar|a|ó|o)": "flash", r"kite(?:ar|a|ando)": "kite", r"pushe(?:ar|a|ando|amos)": "push",
+        r"bai?te(?:ar|a|ó|o|ando)": "bait", r"carre(?:ar|a|ó|o|ando)": "carry", r"feede(?:ar|a|ando)": "feed",
+        r"feedead[oa]s?": "fed", r"stune(?:ar|a|ó|o)": "stun", r"snowballe(?:ar|a|ando)": "snowball",
+        r"tryhardear": "tryhard", r"nerfe(?:ar|aron|ado)": "nerf", r"bufe(?:ar|aron|ado)": "buff",
+        r"rotar": "rotate", r"rotando": "rotating", r"dive(?:ar|a|ando)": "dive", r"tankear": "tank",
+        r"(?:lo|la) (?:ha |han )?reventad[oa]": "destroyed him", r"(?:est[aá]n? )?on fire": "on fire",
+        r"ez|izi": "easy", r"gg ?wp": "good game, well played",
+        r"qu[eé] locura": "that's insane", r"qu[eé] bestia": "what a beast",
+    },
+    "pt": {
+        r"amass(?:ou|ando|ar|a)": "stomped", r"mit(?:ou|ando|ar)": "went crazy", r"jogad(?:aç)?a(?:ço)?": "great play",
+        r"tiltad[oa]s?": "tilted", r"tiltar": "tilt", r"rushar": "rush", r"farm(?:ar|ando|ou)": "farm",
+        r"gank(?:ar|ou|ando)": "gank", r"flash(?:ar|ou)": "flash", r"kit(?:ar|ando)": "kite", r"push(?:ar|ando)": "push",
+        r"carreg(?:ou|ar|ando)": "carried", r"feed(?:ar|ou|ando)": "feed", r"roubad[oa]": "overpowered",
+        r"apel[ãa]o|apelona": "overpowered", r"bagre": "bad player", r"tá?nkar": "tank", r"diva(?:r|ndo|ou)": "dive",
+        r"izi": "easy", r"gg ?wp": "good game, well played",
+    },
+    "fr": {
+        r"tilt[ée]s?": "tilted", r"rush(?:er|e)": "rush", r"farm(?:er|e)": "farm", r"gank(?:er|e)": "gank",
+        r"feed(?:er|e)": "feed", r"carr(?:y|ie)r": "carry", r"cheat[ée]": "overpowered", r"abus[ée]": "overpowered",
+    },
+    "de": {
+        r"getiltet": "tilted", r"gefeedet": "fed", r"gecarried": "carried", r"gegankt": "ganked", r"op": "overpowered",
+    },
+}
+
 # Mishearings that a plain spelling match can't catch.
 ALIASES = {
     "casante": "K'Sante", "kasante": "K'Sante", "nafiri": "Naafiri", "nafili": "Naafiri",
@@ -115,6 +150,8 @@ class Glossary:
         self.use_core_terms = True
         self.custom_words: list[str] = []
         self.fixes: dict[str, str] = {}
+        self.use_slang = True
+        self.slang: dict[str, str] = {}          # the user's own: phrase in any language -> plain English
         self.champions: list[dict] = [{"name": n, "id": None} for n in FALLBACK_CHAMPIONS]
         self.version: str | None = None
         self.updated = 0.0
@@ -129,6 +166,8 @@ class Glossary:
             self.use_core_terms = bool(d.get("use_core_terms", True))
             self.custom_words = [w for w in d.get("custom_words", []) if isinstance(w, str) and w.strip()]
             self.fixes = {k: v for k, v in (d.get("fixes") or {}).items() if k.strip()}
+            self.use_slang = bool(d.get("use_slang", True))
+            self.slang = {k: v for k, v in (d.get("slang") or {}).items() if k.strip()}
         except (OSError, ValueError):
             pass
         try:
@@ -143,6 +182,7 @@ class Glossary:
         GLOSSARY_FILE.write_text(json.dumps({
             "enabled": self.enabled, "use_core_terms": self.use_core_terms,
             "custom_words": self.custom_words, "fixes": self.fixes,
+            "use_slang": self.use_slang, "slang": self.slang,
         }, indent=2, ensure_ascii=False), encoding="utf-8")
         self._build()
 
@@ -161,6 +201,10 @@ class Glossary:
             self.custom_words = words
         if "fixes" in data:
             self.fixes = {str(k).strip(): str(v).strip() for k, v in data["fixes"].items() if str(k).strip()}
+        if "use_slang" in data:
+            self.use_slang = bool(data["use_slang"])
+        if "slang" in data:
+            self.slang = {str(k).strip(): str(v).strip() for k, v in data["slang"].items() if str(k).strip()}
         self.save()
 
     def refresh_champions(self, force: bool = False) -> bool:
@@ -190,6 +234,8 @@ class Glossary:
         return {
             "enabled": self.enabled, "use_core_terms": self.use_core_terms,
             "custom_words": self.custom_words, "fixes": self.fixes, "version": self.version,
+            "use_slang": self.use_slang, "slang": self.slang,
+            "builtin_slang": sum(len(v) for v in SLANG.values()),
             "core_terms": CORE_TERMS,
             "champions": [{"name": c["name"], "id": c.get("id"), "icon": self.icon_url(c.get("id"))}
                           for c in self.champions],
@@ -206,6 +252,21 @@ class Glossary:
                          for w, r in sorted(self.fixes.items(), key=lambda kv: -len(kv[0]))]
         self._term_res = [(re.compile(r"(?<!\w)" + re.escape(w) + r"(?!\w)", re.I), r)
                           for w, r in sorted(TERM_FIXES.items(), key=lambda kv: -len(kv[0]))]
+        self._slang_user = [(re.compile(r"(?<!\w)" + re.escape(w) + r"(?!\w)", re.I), r)
+                            for w, r in sorted(self.slang.items(), key=lambda kv: -len(kv[0]))]
+        self._slang_builtin = {lang: [(re.compile(r"(?<!\w)(?:" + w + r")(?!\w)", re.I), r) for w, r in table.items()]
+                               for lang, table in SLANG.items()}
+
+    # ---- before translating
+    def prepare(self, text: str, lang: str | None) -> tuple[str, int]:
+        """Swap gaming slang for plain English before the text translator sees it."""
+        if not self.enabled or not self.use_slang or not text:
+            return text, 0
+        n = 0
+        for rx, rep in self._slang_user + self._slang_builtin.get(lang or "", []):
+            text, k = rx.subn(lambda m, r=rep: r[:1].upper() + r[1:] if m.group(0)[:1].isupper() else r, text)
+            n += k
+        return text, n
 
     # ---- Whisper prompt
     def hotwords(self, in_game: list[str] | None = None, limit: int = 600, core: bool = True,

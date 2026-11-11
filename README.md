@@ -6,6 +6,26 @@ Open **StreamTranslator** from the Start menu. (From the source folder: double-c
 
 Download the installer from [Releases](https://github.com/JustSad42/StreamTranslator/releases/latest).
 
+## New in 2.3
+
+- **YouTube and Kick VODs** work in the Clip tab, not just Twitch.
+- **Faster clips:** the sound downloads first and Whisper starts on it while the video is still downloading.
+  Translating text is about 6x faster (400 sentences: 9 s → 1.6 s), and reading champions off the screen
+  is about 4x faster (40 s → 10 s).
+- **Re-running a section reuses its downloads** (and the champions it found), so trying another model or
+  setting starts straight away.
+- **Subtitles line up exactly with the video:** Twitch video downloads can start a second or more off the
+  requested time; the app now measures that and moves the subtitles to match. Transcript VOD times are exact.
+- **Slang list:** gamer slang the translator would take literally ("jugadón", "de menos a más", "amassou",
+  "tilteado") is swapped for plain English before translating. 68 phrases built in; add your own in the
+  Glossary tab and test them there.
+- **Label speakers:** when several people talk (duo partner, co-casters), other voices get coloured subtitles
+  and "Speaker 2:" in the transcript. Uses a 26 MB voice model on the CPU (a couple of seconds per clip).
+- **What's new** shows after each update, with **Go back to the old version** if the new one has problems.
+- **Report a problem** (Settings): opens a GitHub issue with the version and recent log filled in, for you to
+  check and submit. If the app ever closes unexpectedly, it offers this at the next start.
+- Fixed: the app could crash when reading champions from the video at the same time as transcribing.
+
 ## New in 2.2
 
 - **Updates itself:** at startup the app checks this repo's latest release. When there's a newer version,
@@ -31,7 +51,7 @@ Download the installer from [Releases](https://github.com/JustSad42/StreamTransl
 ## Clip tab: a VOD section, translated
 
 1. Choose how to find the moment:
-   - **Their VOD**: paste their VOD link, or just type their channel name to pick from their recent VODs.
+   - **Their VOD**: paste their VOD link (Twitch, YouTube or Kick), or type a Twitch channel name to pick from their recent VODs.
      A link with `?t=1h02m30s` starts the section there.
    - **Sync from my VOD**: give your VOD, when the game started and ended in *your* VOD, and one or more of
      their channels. The app finds each one's VOD covering that moment and maps the times, using when each

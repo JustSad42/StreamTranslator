@@ -213,3 +213,76 @@ def test_download_rejects_bad_checksum(monkeypatch, tmp_path):
     import hashlib
     asset["sha256"] = hashlib.sha256(b"hello").hexdigest()
     assert appupdate.download(asset).read_bytes() == b"hello"
+
+
+# ---------------------------------------------------------------- 2.3: slang, speakers, timing, links, reports
+@pytest.mark.parametrize("src,lang,want", [
+    ("Qué jugadón de Faker", "es", "Qué great play de Faker"),
+    ("El equipo fue de menos a más.", "es", "El equipo fue getting better."),
+    ("Es un manco", "es", "Es a bad player"),
+    ("Rushea el dragón", "es", "Rush el dragón"),
+    ("O Faker amassou", "pt", "O Faker stomped"),
+    ("mancomunidad", "es", "mancomunidad"),            # whole words only
+    ("Qué jugadón", "en", "Qué jugadón"),              # only that language's list
+])
+def test_slang_prepare(gl, src, lang, want):
+    assert gl.prepare(src, lang)[0] == want
+
+
+def test_speaker_groups():
+    import numpy as np
+    from streamtranslator import speakers
+    rng = np.random.default_rng(0)
+    a, b = rng.normal(size=256), rng.normal(size=256)
+    rows = [a + rng.normal(scale=1.2, size=256) for _ in range(12)] + [b + rng.normal(scale=1.2, size=256) for _ in range(6)]
+    e = np.array([r / np.linalg.norm(r) for r in rows])
+    labels = speakers.cluster(e, np.ones(len(e)))
+    assert len(set(labels[:12])) == 1 and len(set(labels[12:])) == 1 and labels[0] != labels[12]
+
+
+def test_audio_offset_finds_shift():
+    import numpy as np
+    from streamtranslator.pipeline import audio_offset
+    rng = np.random.default_rng(1)
+    ref = rng.normal(size=16000 * 20).astype(np.float32)
+    later = np.concatenate([rng.normal(size=int(16000 * 1.5)).astype(np.float32), ref])   # video starts 1.5 s earlier
+    assert abs(audio_offset(ref, later) - 1.5) < 0.01
+    assert abs(audio_offset(later[24000 + 8000:], later[24000:]) - 0.5) < 0.01
+
+
+def test_speaker_colours_survive_editing(tmp_path):
+    from streamtranslator.pipeline import write_srt
+    p = tmp_path / "s.srt"
+    write_srt([Segment(0, 2, "Hola", 0), Segment(2, 4, "Qué tal", 1)], p, shift=0.5)
+    cues = read_srt(p)
+    assert cues[0]["text"] == "Hola" and "color" not in cues[0]
+    assert cues[1]["text"] == "Qué tal" and cues[1]["color"].startswith("#")
+    assert cues[0]["start"] == 0.5                                            # shifted to match the video
+    write_srt_cues(cues, p)
+    assert read_srt(p)[1]["color"] == cues[1]["color"]
+
+
+def test_vod_links():
+    from streamtranslator.pipeline import vod_link
+    t = _vod("123", 0, 100)
+    assert vod_link(t, 3750) == "https://www.twitch.tv/videos/123?t=1h02m30s"
+    y = VodInfo(url="https://www.youtube.com/watch?v=abcdefghijk", id="abcdefghijk", title="t", channel="c", duration=9,
+                streams={}, preview_stream="", site="youtube")
+    assert vod_link(y, 75.9) == "https://www.youtube.com/watch?v=abcdefghijk&t=75s"
+
+
+def test_kick_links_recognised():
+    from streamtranslator.pipeline import _KICK_VOD
+    assert _KICK_VOD.search("https://kick.com/xqc/videos/740b79a4-780d-422a-8b97-6a260148e8ba")
+    assert not _KICK_VOD.search("https://kick.com/xqc")
+
+
+def test_report_link_hides_user_and_fits(monkeypatch, tmp_path):
+    from pathlib import Path
+    from streamtranslator import logs
+    log = tmp_path / "app.log"
+    log.write_text("\n".join(f"line {i} {Path.home()}\\Videos\\x.mp4" for i in range(500)), encoding="utf-8")
+    monkeypatch.setattr(logs, "APP_LOG", log)
+    monkeypatch.setattr(logs, "CRASH_LOG", tmp_path / "crash.log")
+    url = logs.report_url("It broke", {"gpu": "RTX"})
+    assert len(url) < 7500 and Path.home().name not in url and "It+broke" in url

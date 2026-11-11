@@ -32,11 +32,40 @@ def is_newer(latest: str, current: str = __version__) -> bool:
     return _vt(latest) > _vt(current)
 
 
+def _release(url: str, timeout: float) -> dict:
+    req = urllib.request.Request(url, headers=HEADERS)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def release_info(version: str, timeout: float = 15) -> dict:
+    """Same shape as check(), for one specific version (used to go back to the previous one)."""
+    return _parse(_release(f"https://api.github.com/repos/{REPO}/releases/tags/v{version.lstrip('vV')}", timeout))
+
+
+def save_notes(version: str, notes: str):
+    DIR.mkdir(parents=True, exist_ok=True)
+    (DIR / f"notes-{version}.md").write_text(notes or "", encoding="utf-8")
+
+
+def notes_for(version: str) -> str:
+    """Release notes for `version`: saved when the update was downloaded, else asked from GitHub."""
+    try:
+        return (DIR / f"notes-{version}.md").read_text(encoding="utf-8")
+    except OSError:
+        pass
+    try:
+        return release_info(version, timeout=8).get("notes", "")
+    except Exception:
+        return ""
+
+
 def check(timeout: float = 15) -> dict:
     """{current, latest, newer, notes, url, asset: {name, url, size, sha256}}"""
-    req = urllib.request.Request(API, headers=HEADERS)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        rel = json.loads(r.read().decode("utf-8"))
+    return _parse(_release(API, timeout))
+
+
+def _parse(rel: dict) -> dict:
     latest = rel.get("tag_name", "").lstrip("vV")
     asset = next((a for a in rel.get("assets", [])
                   if a["name"].lower().startswith("streamtranslator-setup") and a["name"].lower().endswith(".exe")), None)
