@@ -208,11 +208,15 @@ class Glossary:
                           for w, r in sorted(TERM_FIXES.items(), key=lambda kv: -len(kv[0]))]
 
     # ---- Whisper prompt
-    def hotwords(self, in_game: list[str] | None = None, limit: int = 600) -> str | None:
+    def hotwords(self, in_game: list[str] | None = None, limit: int = 600, core: bool = True,
+                 extra: list[str] | None = None) -> str | None:
+        """Terms for Whisper's prompt. core=False leaves out the English game terms (used when
+        Whisper writes down the original language, where English terms would only confuse it)."""
         if not self.enabled:
             return None
         words: list[str] = []
-        for w in list(in_game or []) + self.custom_words + (CORE_TERMS if self.use_core_terms else []):
+        terms = CORE_TERMS if (self.use_core_terms and core) else []
+        for w in list(in_game or []) + list(extra or []) + self.custom_words + terms:
             if w not in words:
                 words.append(w)
         out = ""
@@ -232,9 +236,14 @@ class Glossary:
         return bool(parts) and sum(p in hw for p in parts) / len(parts) >= 0.6
 
     # ---- cleanup
-    def fix(self, text: str, english: bool = True) -> tuple[str, int]:
+    def fix(self, text: str, english: bool = True, extra: list[str] | None = None) -> tuple[str, int]:
+        """extra: names for this job only (e.g. players read off the screen)."""
         if not self.enabled or not text:
             return text, 0
+        if extra:
+            text, k = self._fix_names(text, {_norm(n): n for n in extra if len(_norm(n)) >= 3})
+            fixed, n = self.fix(text, english)
+            return fixed, n + k
         n = 0
         for rx, rep in self._fix_res:
             text, k = rx.subn(rep, text)
@@ -247,7 +256,9 @@ class Glossary:
         text, k = self._fix_names(text)
         return text, n + k
 
-    def _fix_names(self, text: str) -> tuple[str, int]:
+    def _fix_names(self, text: str, table: dict[str, str] | None = None) -> tuple[str, int]:
+        exact = table if table is not None else self._exact
+        fuzzy_keys = [k for k in exact if len(k) >= 4] if table is not None else self._fuzzy_keys
         tokens = list(re.finditer(r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’.&]*", text))
         edits: list[tuple[int, int, str]] = []
         i = 0
@@ -258,21 +269,21 @@ class Glossary:
                 t2 = tokens[i + 1]
                 span = text[t.start():t2.end()]
                 if t2.start() - t.end() <= 1:
-                    hit = self._exact.get(_norm(span))
+                    hit = exact.get(_norm(span))
                     if hit and span != hit and span.lower() != hit.lower():
                         edits.append((t.start(), t2.end(), hit))
                         i += 2
                         continue
             word = t.group().rstrip(".'’")
             key = _norm(word)
-            hit = self._exact.get(key)
+            hit = exact.get(key)
             if hit:
                 if word != hit and word.lower() != hit.lower():
                     edits.append((t.start(), t.start() + len(word), hit))
             elif word[:1].isupper() and len(key) >= 5 and key not in COMMON:
-                close = difflib.get_close_matches(key, self._fuzzy_keys, n=1, cutoff=0.84)
+                close = difflib.get_close_matches(key, fuzzy_keys, n=1, cutoff=0.84)
                 if close:
-                    edits.append((t.start(), t.start() + len(word), self._exact[close[0]]))
+                    edits.append((t.start(), t.start() + len(word), exact[close[0]]))
             i += 1
         for s, e, rep in reversed(edits):
             text = text[:s] + rep + text[e:]
