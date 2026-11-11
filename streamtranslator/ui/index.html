@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>StreamTranslator</title>
+<link rel="stylesheet" href="style.css">
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+</head>
+<body>
+<div class="glow g1"></div><div class="glow g2"></div><div class="glow g3"></div>
+
+<header class="top">
+  <div class="brand">
+    <div class="logo">Aa</div>
+    <div class="brand-text"><b>StreamTranslator</b><span>any stream → English</span></div>
+  </div>
+  <nav class="nav seg" id="nav">
+    <button data-page="clip" class="on"><i class="ic ic-clip"></i>Clip</button>
+    <button data-page="live"><i class="ic ic-live"></i>Live</button>
+    <button data-page="history"><i class="ic ic-clock"></i>History</button>
+    <button data-page="glossary"><i class="ic ic-book"></i>Glossary</button>
+    <button data-page="settings"><i class="ic ic-gear"></i>Settings</button>
+  </nav>
+  <button class="status-chip" id="modelChip" title="Whisper status"><span class="dot"></span><span class="txt">Starting…</span></button>
+</header>
+
+<main>
+<!-- ================================================================ CLIP -->
+<section class="page on" id="page-clip">
+  <div class="grid-2">
+    <div class="col">
+      <div class="card" id="sourceCard">
+        <div class="card-head">
+          <div><div class="eyebrow">Step 1</div><h2>Find the moment</h2></div>
+          <div class="seg sm" id="srcMode">
+            <button data-v="theirs" class="on">Their VOD</button>
+            <button data-v="sync">Sync from my VOD</button>
+          </div>
+        </div>
+
+        <div class="mode-pane on" data-mode="theirs">
+          <div class="bigfield" id="theirField">
+            <i class="ic ic-link"></i>
+            <input id="theirInput" placeholder="Paste their VOD link — or just type their channel name (e.g. ibai)" spellcheck="false" autocomplete="off">
+            <button class="btn primary" id="theirLoad">Load</button>
+          </div>
+          <div class="clip-hint" id="clipHint" hidden></div>
+          <div class="vod-grid" id="vodGrid"></div>
+        </div>
+
+        <div class="mode-pane" data-mode="sync">
+          <p class="lede">Tell it when the game was in <b>your</b> VOD. It finds the same real-world moment in theirs using when each stream started.</p>
+          <div class="sync-grid">
+            <label class="fld wide"><span>Your VOD</span>
+              <div class="field-row">
+                <input id="myVod" placeholder="Your VOD link or ID" spellcheck="false">
+                <button class="btn ghost" id="myVodsBtn" title="Pick from your recent VODs">My VODs</button>
+              </div>
+              <div class="pop-list" id="myVodList" hidden></div>
+            </label>
+            <label class="fld"><span>Game starts (your VOD)</span><input id="myStart" class="time" placeholder="1:02:30"></label>
+            <label class="fld"><span>Game ends (your VOD)</span><input id="myEnd" class="time" placeholder="1:35:00"></label>
+            <div class="fld wide"><span>Their channels or VODs <em>add several to translate everyone from that game</em></span>
+              <div class="chips-in tags" id="syncTheirs"></div></div>
+          </div>
+          <div class="row end"><button class="btn primary" id="syncGo"><i class="ic ic-bolt"></i>Find their moments</button></div>
+          <div class="banner" id="syncResult" hidden></div>
+          <div class="sync-list" id="syncList" hidden></div>
+        </div>
+      </div>
+
+      <div class="card reveal" id="sectionCard" hidden>
+        <div class="vod-head">
+          <img class="vod-thumb" id="vodThumb" alt="">
+          <div class="vod-meta">
+            <div class="eyebrow">Step 2 · pick the section</div>
+            <h3 id="vodTitle"></h3>
+            <div class="muted" id="vodSub"></div>
+          </div>
+          <button class="btn ghost icon" id="vodOpen" title="Open on Twitch at the start"><i class="ic ic-ext"></i></button>
+        </div>
+
+        <div class="frames">
+          <div class="frame" id="frameStart"><div class="skel"></div><img alt=""><span class="badge">START <b></b></span></div>
+          <div class="frame-mid"><div class="len-pill" id="lenPill">0:00</div><div class="map-pill" id="mapPill" hidden></div></div>
+          <div class="frame" id="frameEnd"><div class="skel"></div><img alt=""><span class="badge">END <b></b></span></div>
+        </div>
+
+        <div class="tl" id="tl" tabindex="0">
+          <div class="tl-track" id="tlTrack">
+            <div class="tl-film" id="tlFilm"></div>
+            <div class="tl-mask" id="tlMaskL"></div><div class="tl-mask" id="tlMaskR"></div>
+            <div class="tl-sel" id="tlSel"></div>
+            <div class="tl-cursor" id="tlCursor"></div>
+            <div class="tl-handle" data-h="0"><span></span></div>
+            <div class="tl-handle" data-h="1"><span></span></div>
+            <div class="tl-edge l" id="tlEdgeL">‹</div><div class="tl-edge r" id="tlEdgeR">›</div>
+          </div>
+          <div class="tl-ticks" id="tlTicks"></div>
+          <div class="tl-pop" id="tlPop"><div class="img"></div><b></b></div>
+        </div>
+
+        <div class="time-row">
+          <div class="time-box">
+            <span>Start</span>
+            <button class="nudge" data-h="0" data-d="-10">−10</button><button class="nudge" data-h="0" data-d="-1">−1</button>
+            <input class="time" id="startIn">
+            <button class="nudge" data-h="0" data-d="1">+1</button><button class="nudge" data-h="0" data-d="10">+10</button>
+          </div>
+          <div class="time-box">
+            <span>End</span>
+            <button class="nudge" data-h="1" data-d="-10">−10</button><button class="nudge" data-h="1" data-d="-1">−1</button>
+            <input class="time" id="endIn">
+            <button class="nudge" data-h="1" data-d="1">+1</button><button class="nudge" data-h="1" data-d="10">+10</button>
+          </div>
+          <div class="zoom-box">
+            <button class="btn snap sm" id="snapBtn" title="Read the in-game clock and set the section to exactly the game"><i class="ic ic-target"></i><span>Snap to game</span></button>
+            <button class="btn ghost sm" id="zoomSel" title="Zoom the timeline around your section">Zoom to section</button>
+            <button class="btn ghost sm" id="zoomAll" title="Show the whole VOD">Whole VOD</button>
+          </div>
+        </div>
+        <div class="kbd-hint">Scroll on the timeline to zoom · drag the purple area to slide it · ←/→ nudge 1s (Shift 10s, Ctrl 1min) · ↑/↓ switch handle</div>
+      </div>
+
+      <div class="card reveal" id="runCard" hidden>
+        <div class="card-head">
+          <div><div class="eyebrow">Step 3</div><h2 id="runTitle">Translating…</h2></div>
+          <div class="row"><button class="btn ghost sm" id="queueClear" hidden>Clear finished</button><button class="btn ghost danger" id="cancelBtn">Cancel</button></div>
+        </div>
+        <div class="queue" id="queueList" hidden></div>
+        <div class="stepper" id="stepper"></div>
+        <div class="bar"><div class="bar-fill" id="barFill"></div></div>
+        <div class="run-status"><span id="runStatus"></span><span id="runEta"></span></div>
+        <div class="results" id="results" hidden>
+          <button class="res primary" data-open="subbed"><i class="ic ic-play"></i><b>Play video</b><span>subtitles burned in</span></button>
+          <button class="res" data-open="edit"><i class="ic ic-edit"></i><b>Edit subtitles</b><span>preview, fix, re-burn</span></button>
+          <button class="res" data-open="srt"><i class="ic ic-cc"></i><b>Subtitles</b><span>.srt for your editor</span></button>
+          <button class="res" data-open="transcript"><i class="ic ic-doc"></i><b>Transcript</b><span>with VOD times</span></button>
+          <button class="res" data-open="folder"><i class="ic ic-folder"></i><b>Folder</b><span>everything</span></button>
+        </div>
+        <div class="feed" id="clipFeed"></div>
+      </div>
+    </div>
+
+    <aside class="col side">
+      <div class="card">
+        <div class="eyebrow">Translation</div>
+        <label class="fld"><span>Spoken language</span><select id="langSel"></select></label>
+        <div class="fld"><span>Whisper model</span>
+          <div class="seg full" id="modelSeg">
+            <button data-v="large-v3" class="on">Best</button><button data-v="medium">Fast</button><button data-v="small">Fastest</button>
+          </div>
+        </div>
+        <div class="fld"><span>Champions in this game <em>optional · helps Whisper</em></span><div class="chips-in" id="champsClip"></div></div>
+        <label class="toggle"><input type="checkbox" id="glossClip" checked><span class="sw"></span><div><b>League glossary</b><em>Spell game terms and champions correctly</em></div></label>
+        <label class="toggle"><input type="checkbox" id="isoClip"><span class="sw"></span><div><b>Isolate voices</b><em>Remove game sound and music first. Best for loud teamfights</em></div></label>
+      </div>
+
+      <div class="card">
+        <div class="eyebrow">Output</div>
+        <div class="fld"><span>Video quality</span>
+          <div class="seg full" id="qualSeg"><button data-v="Source">Source</button><button data-v="720p" class="on">720p</button><button data-v="480p">480p</button></div>
+        </div>
+        <div class="fld"><span>Subtitle position</span>
+          <div class="pos-pick" id="posPick">
+            <button data-v="Above game HUD" class="on"><div class="scr"><i class="hud"></i><i class="sub" style="bottom:30%"></i></div>Above HUD</button>
+            <button data-v="Bottom"><div class="scr"><i class="hud"></i><i class="sub" style="bottom:6%"></i></div>Bottom</button>
+            <button data-v="Top"><div class="scr"><i class="hud"></i><i class="sub" style="top:8%"></i></div>Top</button>
+          </div>
+        </div>
+        <div class="fld"><span>Subtitle size</span>
+          <div class="seg full" id="sizeSeg"><button data-v="Small">S</button><button data-v="Medium" class="on">M</button><button data-v="Large">L</button></div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="burnTog" checked><span class="sw"></span><div><b>Burn subtitles into video</b><em>Ready to post or edit</em></div></label>
+        <label class="toggle"><input type="checkbox" id="origTog"><span class="sw"></span><div><b>Original-language subtitles too</b><em>Runs Whisper a second time</em></div></label>
+        <div class="fld"><span>Save to</span>
+          <div class="field-row"><input id="outDir" readonly><button class="btn ghost" id="browseBtn">Browse</button></div>
+        </div>
+      </div>
+
+      <button class="go" id="goBtn" disabled><span>Translate this section</span><kbd>Ctrl ↵</kbd></button>
+    </aside>
+  </div>
+</section>
+
+<!-- ================================================================ LIVE -->
+<section class="page" id="page-live">
+  <div class="grid-2">
+    <div class="col">
+      <div class="card live-hero">
+        <div class="bigfield" id="liveField">
+          <i class="ic ic-live"></i>
+          <input id="liveInput" placeholder="Channel name or stream link — Twitch, YouTube, Kick…" spellcheck="false" autocomplete="off">
+          <button class="btn live" id="liveBtn"><span class="rec"></span><b>Go live</b></button>
+        </div>
+      </div>
+
+      <div class="card stage" id="liveStage">
+        <div class="stage-top">
+          <div class="live-thumb" id="liveThumb">
+            <img alt="" hidden>
+            <div class="thumb-empty">No stream yet</div>
+            <span class="live-pill" hidden>LIVE</span>
+          </div>
+          <div class="stage-info">
+            <div class="eyebrow" id="liveState">Idle</div>
+            <h3 id="liveChannel">Translate anyone, live</h3>
+            <div class="muted clamp2" id="liveTitle">Type a channel and press Go live. Captions show here, in a floating window, or on your own stream through OBS.</div>
+            <div class="stats">
+              <div class="stat"><span>Language</span><b id="stLang">—</b></div>
+              <div class="stat"><span>Delay</span><b id="stDelay">—</b></div>
+              <div class="stat"><span>Lines</span><b id="stLines">0</b></div>
+              <div class="stat"><span>Uptime</span><b id="stUp">0:00</b></div>
+            </div>
+          </div>
+          <div class="meter" id="meter"></div>
+        </div>
+        <div class="now" id="nowBox">
+          <div class="now-text idle" id="nowText">Waiting for speech…</div>
+          <div class="now-orig" id="nowOrig"></div>
+        </div>
+      </div>
+
+      <div class="duo">
+      <div class="card feed-card">
+        <div class="card-head"><h2>Captions</h2><div class="row"><button class="btn ghost sm" id="liveOpenTx" disabled>Open transcript</button><button class="btn ghost sm" id="liveClear">Clear</button></div></div>
+        <div class="feed live-feed" id="liveFeed"><div class="empty">Translated lines collect here, and are also saved to a transcript file.</div></div>
+        <button class="jump" id="jumpLatest" hidden>↓ Latest</button>
+      </div>
+
+      <div class="card feed-card" id="chatCard">
+        <div class="card-head"><div><h2>Chat</h2><div class="muted small" id="chatStatus">Turn on "Translate chat", then go live on a Twitch channel.</div></div>
+          <button class="btn ghost sm" id="chatClear">Clear</button></div>
+        <div class="feed chat-feed" id="chatFeed"></div>
+        <button class="jump" id="chatJump" hidden>↓ Latest</button>
+      </div>
+      </div>
+    </div>
+
+    <aside class="col side">
+      <div class="card">
+        <div class="eyebrow">Translation</div>
+        <label class="fld"><span>Spoken language</span><select id="liveLang"></select></label>
+        <div class="fld"><span>Whisper model</span>
+          <div class="seg full" id="liveModelSeg"><button data-v="large-v3" class="on">Best</button><button data-v="medium">Fast</button><button data-v="small">Fastest</button></div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="liveOrig" checked><span class="sw"></span><div><b>Show original language</b><em>Under each English line</em></div></label>
+        <label class="toggle"><input type="checkbox" id="liveGloss" checked><span class="sw"></span><div><b>League glossary</b><em>Turn off for non-League streams</em></div></label>
+        <label class="toggle"><input type="checkbox" id="liveIso"><span class="sw"></span><div><b>Isolate voices</b><em>Remove game sound and music · adds ~0.4 s</em></div></label>
+        <label class="toggle"><input type="checkbox" id="liveChat" checked><span class="sw"></span><div><b>Translate chat</b><em>Twitch chat, translated on your GPU</em></div></label>
+        <div class="fld"><span>Champions in game <em>optional</em></span><div class="chips-in" id="champsLive"></div></div>
+      </div>
+      <div class="card">
+        <div class="eyebrow">Show captions</div>
+        <label class="toggle"><input type="checkbox" id="ovTog"><span class="sw"></span><div><b>Floating caption window</b><em>Always on top. Drag it over any player</em></div></label>
+        <label class="fld"><span>Text size <em id="ovFontV">30px</em></span><input type="range" id="ovFont" min="16" max="72" value="30"></label>
+        <label class="fld"><span>Background <em id="ovBgV">55%</em></span><input type="range" id="ovBg" min="0" max="100" value="55"></label>
+        <div class="obs">
+          <div><b>OBS browser source</b><em>Put the captions on your own stream</em></div>
+          <button class="btn ghost sm" id="obsBtn">Get link</button>
+        </div>
+        <div class="obs-url" id="obsUrl" hidden><code></code><button class="btn ghost sm" id="obsCopy">Copy</button>
+          <p>In OBS: <b>+ → Browser</b>, paste the link, size 1920×1080. Add <code>?size=56&amp;bg=0.4</code> to the link to change the style.</p></div>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<!-- ================================================================ HISTORY -->
+<section class="page" id="page-history">
+  <div class="hist-wrap">
+    <div class="hist-top">
+      <div><div class="eyebrow">History</div><h2>Everything you've translated</h2></div>
+      <div class="bigfield hist-search"><i class="ic ic-search"></i><input id="histSearch" placeholder="Search titles, channels and what was said…" spellcheck="false"></div>
+      <div class="seg sm" id="histFilter"><button data-v="all" class="on">All</button><button data-v="clip">Clips</button><button data-v="live">Live</button></div>
+    </div>
+    <div class="hist-grid" id="histGrid"></div>
+  </div>
+</section>
+
+<!-- ================================================================ GLOSSARY -->
+<section class="page" id="page-glossary">
+  <div class="grid-2 wide-side">
+    <div class="col">
+      <div class="card">
+        <div class="card-head"><div><div class="eyebrow">League glossary</div><h2>Make Whisper speak League</h2></div>
+          <label class="toggle inline"><input type="checkbox" id="glossOn" checked><span class="sw"></span><b>On</b></label></div>
+        <p class="lede">Whisper gets a short list of game words before it translates, so it writes <b>Baron</b>, <b>Rift Herald</b> and <b>K'Sante</b> instead of guessing. After translating, leftover foreign terms and garbled champion names are cleaned up.</p>
+      </div>
+      <div class="card">
+        <div class="eyebrow">Your words</div>
+        <p class="muted small">Pro players, streamer nicknames, teammates, slang. These get top priority.</p>
+        <div class="chips-in tags" id="customWords"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div><div class="eyebrow">Fixes</div><p class="muted small">Always replace a wrong word with the right one.</p></div><button class="btn ghost sm" id="addFix">+ Add fix</button></div>
+        <div class="fix-table" id="fixTable"></div>
+      </div>
+      <div class="card">
+        <div class="eyebrow">Try it</div>
+        <textarea id="tryIn" rows="2" placeholder="Type a translated line, e.g.  Nafiri flashes in and they take the Heraldo">Nafiri flashes in, Casante dies and they take the Heraldo and the Baron Nashor</textarea>
+        <div class="try-out" id="tryOut"></div>
+      </div>
+    </div>
+    <aside class="col side">
+      <div class="card">
+        <div class="card-head"><div><div class="eyebrow">Champions</div><h3 id="champCount">—</h3></div><button class="btn ghost sm" id="champRefresh">Refresh</button></div>
+        <input id="champFilter" placeholder="Search champions" class="search">
+        <div class="champ-wall" id="champWall"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="eyebrow">Game terms</div><label class="toggle inline"><input type="checkbox" id="coreOn" checked><span class="sw"></span></label></div>
+        <div class="term-cloud" id="termCloud"></div>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<!-- ================================================================ SETTINGS -->
+<section class="page" id="page-settings">
+  <div class="settings">
+    <div class="card">
+      <div class="eyebrow">Display</div>
+      <div class="fld"><span>Interface size <em id="scaleNow"></em></span>
+        <div class="seg full" id="scaleSeg">
+          <button data-v="auto">Auto</button><button data-v="1">100%</button><button data-v="1.25">125%</button>
+          <button data-v="1.5">150%</button><button data-v="1.75">175%</button><button data-v="2">200%</button>
+        </div>
+      </div>
+      <p class="muted small">Auto sizes the app for your screen. Fine-tune any time with <b>Ctrl +</b> / <b>Ctrl −</b>, and <b>Ctrl 0</b> resets.</p>
+    </div>
+    <div class="card">
+      <div class="eyebrow">You</div>
+      <label class="fld"><span>Your Twitch channel <em>for "My VODs" in sync mode</em></span><input id="setChannel" placeholder="your_channel" spellcheck="false"></label>
+    </div>
+    <div class="card">
+      <div class="eyebrow">Files</div>
+      <div class="fld"><span>Save translated clips to</span><div class="field-row"><input id="setOut" readonly><button class="btn ghost" id="setOutBtn">Browse</button></div></div>
+    </div>
+    <div class="card">
+      <div class="eyebrow">Whisper</div>
+      <label class="toggle"><input type="checkbox" id="setPreload" checked><span class="sw"></span><div><b>Load Whisper when the app opens</b><em>The first translation starts right away instead of waiting ~10 s</em></div></label>
+      <div class="about" id="about"></div>
+    </div>
+    <div class="card">
+      <div class="eyebrow">App</div>
+      <label class="toggle"><input type="checkbox" id="setNotify" checked><span class="sw"></span><div><b>Windows notifications</b><em>When a translation or queue finishes while you're in another window</em></div></label>
+      <label class="toggle"><input type="checkbox" id="setUpdate" checked><span class="sw"></span><div><b>Keep the downloader up to date</b><em>Checks for a new yt-dlp at startup. Twitch changes break old versions</em></div></label>
+      <div class="upd-row"><span id="updText">yt-dlp —</span><button class="btn ghost sm" id="updBtn">Check now</button></div>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- ================================================================ SUBTITLE EDITOR -->
+<div class="modal" id="editor" hidden>
+  <div class="ed">
+    <div class="ed-head">
+      <div><div class="eyebrow">Subtitle editor</div><h3 id="edTitle"></h3></div>
+      <div class="row">
+        <span class="muted small" id="edState"></span>
+        <button class="btn ghost" id="edSave">Save</button>
+        <button class="btn primary" id="edBurn"><i class="ic ic-bolt"></i>Save &amp; burn video</button>
+        <button class="btn ghost icon" id="edClose" title="Close (Esc)">✕</button>
+      </div>
+    </div>
+    <div class="ed-body">
+      <div class="ed-left">
+        <div class="ed-video">
+          <video id="edVideo" controls preload="auto"></video>
+          <div class="ed-sub" id="edSub"></div>
+          <div class="ed-loading" id="edLoading"><div class="spinner"></div><span>Preparing preview…</span><div class="bar"><div class="bar-fill" id="edBar"></div></div></div>
+        </div>
+        <div class="ed-tools">
+          <button class="btn ghost sm" id="edSetStart" title="Set the selected line's start to the playhead ([)">⇤ Start here</button>
+          <button class="btn ghost sm" id="edSetEnd" title="Set the selected line's end to the playhead (])">End here ⇥</button>
+          <button class="btn ghost sm" id="edSplit" title="Split the selected line at the playhead">Split</button>
+          <button class="btn ghost sm" id="edAdd" title="Add a new line at the playhead">+ Line</button>
+          <div class="seg sm" id="edPos"><button data-v="Above game HUD">Above HUD</button><button data-v="Bottom">Bottom</button><button data-v="Top">Top</button></div>
+          <div class="seg sm" id="edSize"><button data-v="Small">S</button><button data-v="Medium">M</button><button data-v="Large">L</button></div>
+        </div>
+        <div class="kbd-hint">Space play/pause (outside text boxes) · ←/→ 2 s · [ and ] set start/end · Ctrl+S save · Esc close</div>
+      </div>
+      <div class="ed-list" id="edList"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<div class="drop-hint" id="dropHint"><div>Drop the link</div></div>
+<script src="app.js"></script>
+</body>
+</html>
