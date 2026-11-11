@@ -129,7 +129,7 @@ let nav, srcMode, modelSeg, qualSeg, sizeSeg, liveModel, champsClip, champsLive,
 async function boot() {
   nav = seg($('#nav'), showPage);
   const r = await api('app.init');
-  S.settings = r.settings; S.gpu = r.gpu || ''; S.scale = r.scale; S.update = r.update || {};
+  S.settings = r.settings; S.gpu = r.gpu || ''; S.scale = r.scale; S.update = r.update || {}; S.appUpdate = r.app_update || {};
   applyGloss(r.glossary);
   initClip(); initLive(); initGlossary(); initSettings(); initHistory(); initEditor();
   initSetup(r.components, r.setup_needed && !r.settings.setup_done || (r.components && !r.components.gpu.ok && r.components.has_nvidia));
@@ -788,6 +788,13 @@ function initSettings() {
   $('#setUpdate').checked = st.auto_update; $('#setUpdate').onchange = e => setSetting('auto_update', e.target.checked);
   $('#updBtn').onclick = async () => { const b = $('#updBtn'); b.classList.add('busy'); try { showUpdate(await api('update.check'), true); } catch (e) { toast(e.message, 'bad'); } finally { b.classList.remove('busy'); } };
   showUpdate(S.update);
+  $('#setAppUpd').checked = st.app_update !== false; $('#setAppUpd').onchange = e => setSetting('app_update', e.target.checked);
+  $('#appUpdBtn').onclick = async () => {
+    if (S.appUpdate && S.appUpdate.newer) { installAppUpdate(); return; }
+    const b = $('#appUpdBtn'); b.classList.add('busy');
+    try { showAppUpdate(await api('appupdate.check'), true); } catch (e) { toast(e.message, 'bad'); } finally { b.classList.remove('busy'); }
+  };
+  showAppUpdate(S.appUpdate);
   $('#modelChip').onclick = () => showPage('settings');
   scaleSeg = seg($('#scaleSeg'), v => api('ui.scale', { value: v === 'auto' ? 'auto' : +v }));
   showScale(S.scale.value, st.ui_scale, S.scale.auto);
@@ -831,6 +838,48 @@ function showUpdate(u, manual) {
   else t.textContent = `yt-dlp ${u.current || u.latest || '?'} · up to date`;
   if (manual && !u.error) toast(u.updated ? `Downloaded yt-dlp ${u.latest}. It's used next time you open the app.` : 'yt-dlp is up to date', 'good', 3000);
 }
+/* app updates from GitHub releases */
+let appUpdCard = null, appUpdShown = '';
+function showAppUpdate(u, manual) {
+  if (!u) return; S.appUpdate = u;
+  const t = $('#appUpdText'), b = $('#appUpdBtn');
+  if (t) {
+    if (u.error) t.textContent = `StreamTranslator ${u.current} · couldn't check for updates (offline?)`;
+    else if (u.newer) t.textContent = `StreamTranslator ${u.current} · version ${u.latest} is available`;
+    else if (u.latest) t.textContent = `StreamTranslator ${u.current} · up to date`;
+    else t.textContent = `StreamTranslator ${u.current}`;
+    b.textContent = u.newer ? `Update to ${u.latest}` : 'Check now';
+    b.classList.toggle('primary', !!u.newer); b.classList.toggle('ghost', !u.newer);
+  }
+  if (manual && u.error) toast('Couldn\'t reach GitHub: ' + u.error, 'bad');
+  else if (manual && !u.newer) toast(`You have the newest version (${u.current})`, 'good', 3000);
+  if (u.newer && (manual || appUpdShown !== u.latest)) appUpdPopup(u);
+}
+function appUpdPopup(u) {
+  appUpdShown = u.latest; if (appUpdCard) appUpdCard.remove();
+  const mb = u.asset && u.asset.size ? ` · ${Math.round(u.asset.size / 1048576)} MB` : '';
+  const notes = (u.notes || '').split('\n').map(s => s.trim()).filter(Boolean).slice(0, 6).join('\n');
+  appUpdCard = h('div', { class: 'toast upd-card' },
+    h('div', { class: 'upd-body' },
+      h('b', {}, `StreamTranslator ${u.latest} is out`), h('div', { class: 'muted small' }, `You have ${u.current}${mb}`),
+      notes ? h('div', { class: 'upd-notes' }, notes) : '',
+      h('div', { class: 'mini upd-prog', hidden: true }, h('i')),
+      h('div', { class: 'row upd-btns' },
+        h('button', { class: 'btn primary sm', onclick: installAppUpdate }, 'Update now'),
+        h('button', { class: 'btn ghost sm', onclick: () => { appUpdCard.remove(); appUpdCard = null; } }, 'Later'),
+        h('button', { class: 'btn ghost sm', onclick: () => api('os.url', { url: u.url }).catch(() => {}) }, 'What\'s new'))));
+  $('#toasts').append(appUpdCard);
+}
+async function installAppUpdate() {
+  if (!appUpdCard) appUpdPopup(S.appUpdate);
+  const btns = $$('.upd-btns button', appUpdCard); btns.forEach(b => b.disabled = true);
+  $('.upd-prog', appUpdCard).hidden = false; btns[0].textContent = 'Downloading…';
+  try { await api('appupdate.install'); btns[0].textContent = 'Installing… the app will reopen'; }
+  catch (e) { toast(e.message, 'bad', 8000); btns.forEach(b => b.disabled = false); btns[0].textContent = 'Update now'; $('.upd-prog', appUpdCard).hidden = true; }
+}
+on('appupdate.status', m => showAppUpdate(m));
+on('appupdate.progress', m => { if (!appUpdCard) return; $('.upd-prog i', appUpdCard).style.width = Math.round(m.f * 100) + '%'; if (m.installing) $('.upd-btns button', appUpdCard).textContent = 'Installing… the app will reopen'; });
+
 on('update.status', m => { showUpdate(m); if (m.updated) toast(`Downloaded yt-dlp ${m.latest}. Restart the app to use it.`, 'good', 6000); });
 
 /* ================================================================ CHAT */

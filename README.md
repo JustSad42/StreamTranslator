@@ -4,6 +4,15 @@ Translate other streamers into English with Whisper on your own GPU. Nothing is 
 
 Open **StreamTranslator** from the Start menu. (From the source folder: double-click `StreamTranslator.pyw`.)
 
+Download the installer from [Releases](https://github.com/JustSad42/StreamTranslator/releases/latest).
+
+## New in 2.2
+
+- **Updates itself:** at startup the app checks this repo's latest release. When there's a newer version,
+  click **Update now**: it downloads the installer, checks it against the SHA-256 GitHub publishes,
+  installs it silently and reopens. Your settings, history, glossary, models and GPU libraries are kept.
+  Turn the check off in Settings → App.
+
 ## New in 2.1
 
 - **Two-step translation (default):** Whisper writes down what was said in the original language, then
@@ -117,6 +126,16 @@ uv pip install --python .venv\Scripts\python.exe --reinstall onnxruntime-gpu==1.
 ```
 
 (faster-whisper pulls in the CPU-only onnxruntime, which hides the GPU one, so it's swapped out.)
+
+## Publishing an update
+
+```
+powershell -ExecutionPolicy Bypass -File release.ps1 -Version 2.2.1 -Notes "What changed"
+```
+
+Sets the version, runs the tests, builds the installer, commits, tags, pushes and creates the GitHub
+release with the installer attached. Installed copies offer the update the next time they open.
+Needs the GitHub CLI logged in (`gh auth login`).
 
 Needs `ffmpeg` on PATH and an NVIDIA GPU (it falls back to the CPU, which is slow). The app's code is in
 `streamtranslator/`, with the interface in `streamtranslator/ui/`.

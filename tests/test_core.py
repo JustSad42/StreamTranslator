@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from streamtranslator import chat, detect, snap, sync, timefmt, translate  # noqa: E402
+from streamtranslator import appupdate, chat, detect, snap, sync, timefmt, translate  # noqa: E402
 from streamtranslator.glossary import Glossary  # noqa: E402
 from streamtranslator.pipeline import (Segment, VodInfo, _balanced_wrap, read_srt, to_cues,  # noqa: E402
                                        write_srt_cues)
@@ -173,3 +173,43 @@ def test_players_from_ocr():
     names = detect.players_in(frames)
     assert "Faker" in names and "Knight" in names and "Xun" in names
     assert not {"Verizon", "Nearsighted", "Patch", "Lck"} & set(names)
+
+
+# ---------------------------------------------------------------- app updates
+def test_version_compare():
+    assert appupdate.is_newer("2.2.0", "2.1.0") and appupdate.is_newer("2.10.0", "2.9.9")
+    assert not appupdate.is_newer("2.1.0", "2.1.0") and not appupdate.is_newer("2.0.9", "2.1.0")
+
+
+def test_check_reads_release(monkeypatch):
+    import io
+    import json
+    rel = {"tag_name": "v9.0.0", "body": "New stuff", "html_url": "https://github.com/x/releases/v9.0.0",
+           "assets": [{"name": "notes.txt", "browser_download_url": "u0", "size": 1},
+                      {"name": "StreamTranslator-Setup-9.0.0.exe", "browser_download_url": "u1", "size": 123,
+                       "digest": "sha256:ABCDEF"}]}
+
+    class R(io.BytesIO):
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(appupdate.urllib.request, "urlopen", lambda *a, **k: R(json.dumps(rel).encode()))
+    info = appupdate.check()
+    assert info["newer"] and info["latest"] == "9.0.0"
+    assert info["asset"] == {"name": "StreamTranslator-Setup-9.0.0.exe", "url": "u1", "size": 123, "sha256": "abcdef"}
+
+
+def test_download_rejects_bad_checksum(monkeypatch, tmp_path):
+    import io
+
+    class R(io.BytesIO):
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(appupdate, "DIR", tmp_path)
+    monkeypatch.setattr(appupdate.urllib.request, "urlopen", lambda *a, **k: R(b"hello"))
+    asset = {"name": "StreamTranslator-Setup-9.0.0.exe", "url": "https://example.invalid/u", "size": 5, "sha256": "0" * 64}
+    with pytest.raises(RuntimeError):
+        appupdate.download(asset)
+    assert not list(tmp_path.iterdir())
+    import hashlib
+    asset["sha256"] = hashlib.sha256(b"hello").hexdigest()
+    assert appupdate.download(asset).read_bytes() == b"hello"

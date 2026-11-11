@@ -65,6 +65,8 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; in-app updates run this installer with /SILENT: reopen the app when done
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: WizardSilent
 
 [UninstallDelete]
 ; downloaded yt-dlp updates and models. Settings, history and glossary in %APPDATA%\StreamTranslator are kept.
@@ -72,3 +74,4 @@ Type: filesandordirs; Name: "{localappdata}\StreamTranslator\pylib"
 Type: filesandordirs; Name: "{localappdata}\StreamTranslator\models"
 Type: filesandordirs; Name: "{localappdata}\StreamTranslator\cuda"
 Type: filesandordirs; Name: "{localappdata}\StreamTranslator\icons"
+Type: filesandordirs; Name: "{localappdata}\StreamTranslator\updates"

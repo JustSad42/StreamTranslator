@@ -352,10 +352,12 @@
     <div class="card">
       <div class="eyebrow">App</div>
       <label class="toggle"><input type="checkbox" id="setNotify" checked><span class="sw"></span><div><b>Windows notifications</b><em>When a translation or queue finishes while you're in another window</em></div></label>
+      <label class="toggle"><input type="checkbox" id="setAppUpd" checked><span class="sw"></span><div><b>Check for app updates</b><em>Looks for a new StreamTranslator version on GitHub at startup. Nothing installs without your click</em></div></label>
       <label class="toggle"><input type="checkbox" id="setUpdate" checked><span class="sw"></span><div><b>Keep the downloader up to date</b><em>Checks for a new yt-dlp at startup. Twitch changes break old versions</em></div></label>
       <div class="fld" style="margin-top:12px"><span>Text translator <em>for two-step translation and chat</em></span>
         <div class="seg full" id="trSeg"><button data-v="better" class="on">Better (2.7 GB)</button><button data-v="standard">Standard (1.2 GB)</button></div></div>
       <div class="upd-row"><span>GPU libraries, models and FFmpeg</span><button class="btn ghost sm" id="openSetup">Open setup</button></div>
+      <div class="upd-row"><span id="appUpdText">StreamTranslator —</span><button class="btn ghost sm" id="appUpdBtn">Check now</button></div>
       <div class="upd-row"><span id="updText">yt-dlp —</span><button class="btn ghost sm" id="updBtn">Check now</button></div>
     </div>
   </div>

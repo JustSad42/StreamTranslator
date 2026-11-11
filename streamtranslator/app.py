@@ -17,7 +17,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import (QAction, QColor, QDesktopServices, QGuiApplication, QIcon, QKeySequence, QPainter,
                            QPixmap, QShortcut)
 from PySide6.QtWebChannel import QWebChannel
@@ -25,7 +25,7 @@ from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMenu, QSystemTrayIcon
 
-from . import APP_NAME, __version__, history, updater
+from . import APP_NAME, __version__, appupdate, history, updater
 from .glossary import DATA_DIR, Glossary
 from .pipeline import (NO_WINDOW, Callbacks, Cancelled, JobError, JobParams, ffmpeg_exe, fetch_info, grab_frame,
                        lang_name, load_model, model_device, model_is_downloaded, read_meta, read_srt, reburn,
@@ -41,7 +41,7 @@ DEFAULTS = {
     "live_language": "", "live_orig": True, "live_isolate": False, "live_chat": True,
     "overlay_font": 30, "overlay_bg": 0.55, "ui_scale": "auto", "notify": True, "auto_update": True,
     "method": "two-step", "translator": "better", "auto_details": True, "live_method": "two-step",
-    "custom_model": "", "setup_done": False,
+    "custom_model": "", "setup_done": False, "app_update": True, "app_update": True,
 }
 # Methods that touch Qt widgets must run on the UI thread.
 MAIN_THREAD = {"components.model_folder", "os.browse", "os.copy", "os.clipboard", "overlay.show", "overlay.style", "obs.url", "ui.scale"}
@@ -71,6 +71,7 @@ class Backend(QObject):
     event = Signal(str)      # to the page (always emitted on the UI thread)
     _out = Signal(str)       # from any thread -> queued to the UI thread
     _notify = Signal(str, str)
+    _quit = Signal()
 
     def __init__(self, window: "MainWindow"):
         super().__init__()
@@ -93,6 +94,9 @@ class Backend(QObject):
         self.snap_cancel: threading.Event | None = None
         self._out.connect(self._deliver, Qt.QueuedConnection)
         self._notify.connect(self._show_notification, Qt.QueuedConnection)
+        self._quit.connect(self._quit_for_update, Qt.QueuedConnection)
+        self.app_update: dict = {"current": __version__}
+        self.updating = False
 
     # ---- plumbing
     def emit(self, type_: str, **data):
@@ -167,6 +171,8 @@ class Backend(QObject):
         threading.Thread(target=self._refresh_champions, daemon=True).start()
         if self.settings.get("auto_update", True):
             threading.Thread(target=self._check_update, daemon=True).start()
+        if self.settings.get("app_update", True):
+            threading.Thread(target=self.m_appupdate_check, daemon=True).start()
         from . import components
         from .pipeline import MODEL_PATHS
         if self.settings.get("custom_model"):
@@ -184,7 +190,7 @@ class Backend(QObject):
             ffmpeg_ok = False
         return {"settings": self.settings, "glossary": gl.summary(), "gpu": self.gpu, "version": __version__,
                 "scale": {"value": self.window.view.zoomFactor(), "auto": auto_scale()},
-                "update": self.update_info, "ffmpeg": ffmpeg_ok, "queue": self._queue_view(),
+                "update": self.update_info, "app_update": self.app_update, "ffmpeg": ffmpeg_ok, "queue": self._queue_view(),
                 "components": comp, "setup_needed": setup_needed,
                 "model": {"name": self.settings.get("model"),
                           "device": model_device(self.settings.get("model", "large-v3"))}}
@@ -207,6 +213,39 @@ class Backend(QObject):
 
     def m_update_check(self):
         return self._check_update()
+
+    # ---- app updates (GitHub releases)
+    def m_appupdate_check(self):
+        try:
+            self.app_update = {**appupdate.check(), "checked": time.time()}
+        except Exception as e:
+            self.app_update = {"current": __version__, "error": str(e), "checked": time.time()}
+        self.emit("appupdate.status", **self.app_update)
+        return self.app_update
+
+    def m_appupdate_install(self):
+        info = self.app_update
+        if not info.get("newer") or not info.get("asset"):
+            info = self.m_appupdate_check()
+        if not info.get("newer"):
+            raise ValueError("You already have the newest version.")
+        if any(j["status"] in ("pending", "running") for j in self.jobs) or self.live:
+            raise ValueError("Finish or stop the running translations first, then update.")
+        if self.updating:
+            raise ValueError("The update is already downloading.")
+        self.updating = True
+        try:
+            path = appupdate.download(info["asset"], progress=lambda f: self.emit("appupdate.progress", f=f))
+            appupdate.install(path)
+        finally:
+            self.updating = False
+        self.emit("appupdate.progress", f=1, installing=True)
+        self._quit.emit()
+        return {"installing": info["latest"]}
+
+    @Slot()
+    def _quit_for_update(self):
+        QTimer.singleShot(600, lambda: (self.window.close(), QApplication.quit()))
 
     def _preload(self, name: str):
         if model_device(name):
