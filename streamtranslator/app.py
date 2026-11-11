@@ -843,6 +843,13 @@ def selftest(out_path: str) -> int:
     check("sentencepiece", lambda: __import__("sentencepiece").__version__)
     check("ui files", lambda: (UI_DIR / "index.html").exists() or (_ for _ in ()).throw(FileNotFoundError(UI_DIR)))
     check("components", lambda: __import__("streamtranslator.components", fromlist=["x"]).status()["ffmpeg"])
+    def whisper_gpu():
+        from .pipeline import load_model, model_device, model_is_downloaded
+        if not model_is_downloaded("large-v3"):
+            return "skipped (model not downloaded)"
+        load_model("large-v3")
+        return f"large-v3 loaded on {model_device('large-v3')}"
+    check("whisper", whisper_gpu)
     check("vad model", lambda: __import__("faster_whisper.vad", fromlist=["x"]).get_vad_model() is not None)
     Path(out_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
     return 0

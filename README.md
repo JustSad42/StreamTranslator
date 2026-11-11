@@ -4,6 +4,21 @@ Translate other streamers into English with Whisper on your own GPU. Nothing is 
 
 Open **StreamTranslator** from the Start menu. (From the source folder: double-click `StreamTranslator.pyw`.)
 
+## New in 2.1
+
+- **Two-step translation (default):** Whisper writes down what was said in the original language, then
+  Meta's NLLB translator (on your GPU) turns it into English. It keeps every sentence, which Whisper's
+  built-in translation tends to drop. Choose **Turbo** for ~3x faster jobs, or **Whisper only** for the old method.
+  Translator size (Better 1.3B / Standard 600M) is in Settings and also applies to chat.
+- **Reads who's in the game:** champion portraits (matched against Riot's icons) and player names
+  (OCR) are fed to Whisper for that job. Tested: 16 of 20 champions right on two broadcast streams.
+- **Subtitles-only jobs download just the audio** (a minute of audio in ~3 s).
+- **Small installer (362 MB, was 1.8 GB):** a setup screen on first run finds GPU libraries already on
+  the PC (CUDA Toolkit, Faster-Whisper-XXL, Subtitle Edit) or downloads NVIDIA's official ones
+  (1.25 GB, checksum-checked), downloads models, or uses a faster-whisper model folder you already have.
+  FFmpeg is bundled. Voice isolation now runs on DirectML (any GPU, and faster).
+- **Tests:** `.venv\Scripts\python -m pytest -q` (49 tests).
+
 ## Clip tab: a VOD section, translated
 
 1. Choose how to find the moment:
