@@ -286,3 +286,15 @@ def test_report_link_hides_user_and_fits(monkeypatch, tmp_path):
     monkeypatch.setattr(logs, "CRASH_LOG", tmp_path / "crash.log")
     url = logs.report_url("It broke", {"gpu": "RTX"})
     assert len(url) < 7500 and Path.home().name not in url and "It+broke" in url
+
+
+def test_update_helper_really_runs(tmp_path):
+    """2.2.0/2.3.0 launched the helper so that PowerShell silently did nothing; updates never installed."""
+    import time
+    marker = tmp_path / "ran.txt"
+    appupdate.run_helper(f"Set-Content -Path '{marker}' -Value ok").wait(60)
+    for _ in range(20):
+        if marker.exists():
+            break
+        time.sleep(0.25)
+    assert marker.exists()

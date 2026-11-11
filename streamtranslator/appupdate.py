@@ -115,10 +115,23 @@ def install(installer: Path):
     """Run the installer once this process has exited. The caller quits the app right after."""
     if not getattr(sys, "frozen", False):
         raise RuntimeError("Updates install into the installed app. You're running from the source folder.")
-    pid = os.getpid()
-    ps = (f"Wait-Process -Id {pid} -Timeout 90 -ErrorAction SilentlyContinue; "
-          f"Start-Process -FilePath '{str(installer).replace(chr(39), chr(39) * 2)}' "
-          f"-ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART'")
-    subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-Command", ps],
-                     creationflags=0x00000008 | 0x00000200,   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-                     close_fds=True)
+    q = lambda p: str(p).replace("'", "''")
+    log = DIR / "install.log"
+    ps = (f"Wait-Process -Id {os.getpid()} -Timeout 90 -ErrorAction SilentlyContinue; "
+          f"Start-Process -FilePath '{q(installer)}' "
+          f"-ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/LOG=\"{q(log)}\"'")
+    run_helper(ps)
+
+
+def run_helper(ps: str) -> subprocess.Popen:
+    """Run a PowerShell command in the background that outlives this app.
+
+    It needs CREATE_NO_WINDOW (a hidden console of its own). 2.2.0 and 2.3.0 used DETACHED_PROCESS,
+    which leaves PowerShell with no console at all, and it then quietly does nothing: the update was
+    downloaded but the installer never started."""
+    args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-Command", ps]
+    no_window, new_group, breakaway = 0x08000000, 0x00000200, 0x01000000
+    try:   # also leave any job object the app runs in, so closing the app can't take the helper with it
+        return subprocess.Popen(args, creationflags=no_window | new_group | breakaway, close_fds=True)
+    except OSError:
+        return subprocess.Popen(args, creationflags=no_window | new_group, close_fds=True)
