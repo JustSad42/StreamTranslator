@@ -41,9 +41,10 @@ DEFAULTS = {
     "live_language": "", "live_orig": True, "live_isolate": False, "live_chat": True,
     "overlay_font": 30, "overlay_bg": 0.55, "ui_scale": "auto", "notify": True, "auto_update": True,
     "method": "two-step", "translator": "better", "auto_details": True, "live_method": "two-step",
+    "custom_model": "", "setup_done": False,
 }
 # Methods that touch Qt widgets must run on the UI thread.
-MAIN_THREAD = {"os.browse", "os.copy", "os.clipboard", "overlay.show", "overlay.style", "obs.url", "ui.scale"}
+MAIN_THREAD = {"components.model_folder", "os.browse", "os.copy", "os.clipboard", "overlay.show", "overlay.style", "obs.url", "ui.scale"}
 
 
 def auto_scale() -> float:
@@ -166,8 +167,17 @@ class Backend(QObject):
         threading.Thread(target=self._refresh_champions, daemon=True).start()
         if self.settings.get("auto_update", True):
             threading.Thread(target=self._check_update, daemon=True).start()
-        if self.settings.get("preload"):
-            self.pool.submit(self._preload, self.settings.get("model", "large-v3"))
+        from . import components
+        from .pipeline import MODEL_PATHS
+        if self.settings.get("custom_model"):
+            MODEL_PATHS["custom"] = self.settings["custom_model"]
+        comp = self.m_components_status()
+        gpu_ready = comp["gpu"]["ok"] or not comp["has_nvidia"]
+        model = self.settings.get("model", "large-v3")
+        setup_needed = (not gpu_ready or not comp["ffmpeg"]["ok"]
+                        or not (model == "custom" or comp["models"]["whisper"].get(model, {}).get("ok")))
+        if self.settings.get("preload") and gpu_ready and not setup_needed:
+            self.pool.submit(self._preload, model)
         try:
             ffmpeg_ok = bool(ffmpeg_exe())
         except JobError:
@@ -175,6 +185,7 @@ class Backend(QObject):
         return {"settings": self.settings, "glossary": gl.summary(), "gpu": self.gpu, "version": __version__,
                 "scale": {"value": self.window.view.zoomFactor(), "auto": auto_scale()},
                 "update": self.update_info, "ffmpeg": ffmpeg_ok, "queue": self._queue_view(),
+                "components": comp, "setup_needed": setup_needed,
                 "model": {"name": self.settings.get("model"),
                           "device": model_device(self.settings.get("model", "large-v3"))}}
 
@@ -208,6 +219,54 @@ class Backend(QObject):
             self.emit("model.status", state="ready", name=name, device=model_device(name))
         except Exception as e:
             self.emit("model.status", state="error", name=name, error=str(e))
+
+    # ---- components (first-run setup)
+    def m_components_status(self):
+        from . import components
+        st = components.status()
+        st["custom_model"] = self.settings.get("custom_model") or ""
+        st["selected_model"] = self.settings.get("model", "large-v3")
+        st["translator"] = self.settings.get("translator", "better")
+        return st
+
+    def m_components_download(self, what: str, name: str = ""):
+        """what: gpu | whisper | translator | isolation. Runs in the background with progress events."""
+        from . import components, cuda
+
+        def work():
+            prog = lambda f, s: self.emit("comp.progress", what=what, name=name, f=round(f, 3), text=s)
+            try:
+                if what == "gpu":
+                    components.download_gpu_libs(prog)
+                    cuda.refresh()
+                else:
+                    components.download_model(what, name, prog)
+                self.emit("comp.done", what=what, name=name, status=self.m_components_status())
+            except Exception as e:
+                self.emit("comp.error", what=what, name=name, message=str(e))
+        threading.Thread(target=work, daemon=True).start()
+        return True
+
+    def m_components_use_gpu_dir(self, dir: str, label: str):
+        from . import components, cuda
+        components.use_existing(dir, label)
+        cuda.refresh()
+        return self.m_components_status()
+
+    def m_components_model_folder(self):
+        from . import components
+        from .pipeline import MODEL_PATHS
+        d = QFileDialog.getExistingDirectory(self.window, "Pick a faster-whisper model folder", str(Path.home()))
+        if not d:
+            return None
+        path = components.check_model_folder(d)
+        MODEL_PATHS["custom"] = path
+        self.m_settings_save({"custom_model": path, "model": "custom"})
+        return self.m_components_status()
+
+    def m_setup_done(self):
+        self.m_settings_save({"setup_done": True})
+        return True
 
     def m_model_preload(self, name: str):
         self._preload(name)
@@ -783,6 +842,7 @@ def selftest(out_path: str) -> int:
     check("windows ocr", lambda: __import__("streamtranslator.snap", fromlist=["x"])._get_engine() is not None)
     check("sentencepiece", lambda: __import__("sentencepiece").__version__)
     check("ui files", lambda: (UI_DIR / "index.html").exists() or (_ for _ in ()).throw(FileNotFoundError(UI_DIR)))
+    check("components", lambda: __import__("streamtranslator.components", fromlist=["x"]).status()["ffmpeg"])
     check("vad model", lambda: __import__("faster_whisper.vad", fromlist=["x"]).get_vad_model() is not None)
     Path(out_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
     return 0

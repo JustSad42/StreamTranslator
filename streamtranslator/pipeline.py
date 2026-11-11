@@ -57,6 +57,10 @@ def lang_name(code: str | None) -> str:
 
 
 def ffmpeg_exe() -> str:
+    if getattr(sys, "frozen", False):                 # the installer ships its own copy
+        bundled = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)) / "ffmpeg" / "ffmpeg.exe"
+        if bundled.exists():
+            return str(bundled)
     exe = shutil.which("ffmpeg")
     if not exe:
         raise JobError("ffmpeg was not found. Install it with:  winget install Gyan.FFmpeg")
@@ -254,6 +258,9 @@ _model_device: dict[str, str] = {}
 _model_lock = threading.Lock()
 
 
+MODEL_PATHS: dict[str, str] = {}      # "custom" -> a faster-whisper model folder the user picked
+
+
 def load_model(name: str, log: Callable[[str], None] = lambda s: None):
     """Load (or reuse) a Whisper model. Two can stay loaded, so live mode and a
     clip job can use different models. Safe to call from several threads."""
@@ -264,12 +271,12 @@ def load_model(name: str, log: Callable[[str], None] = lambda s: None):
         cuda.setup()
         from faster_whisper import WhisperModel
         try:
-            model = WhisperModel(name, device="cuda", compute_type="float16", num_workers=2)
+            model = WhisperModel(MODEL_PATHS.get(name, name), device="cuda", compute_type="float16", num_workers=2)
             _model_device[name] = "GPU"
             log(f"Loaded Whisper {name} on the GPU.")
         except Exception as e:
             log(f"GPU load failed ({e}). Falling back to CPU, which is much slower.")
-            model = WhisperModel(name, device="cpu", compute_type="int8", num_workers=2)
+            model = WhisperModel(MODEL_PATHS.get(name, name), device="cpu", compute_type="int8", num_workers=2)
             _model_device[name] = "CPU"
         while len(_model_cache) >= 2:
             _model_cache.pop(next(iter(_model_cache)))
@@ -282,6 +289,8 @@ def model_device(name: str) -> str | None:
 
 
 def model_is_downloaded(name: str) -> bool:
+    if name in MODEL_PATHS:
+        return Path(MODEL_PATHS[name]).exists()
     try:
         from faster_whisper.utils import download_model
         download_model(name, local_files_only=True)

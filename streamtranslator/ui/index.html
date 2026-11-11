@@ -355,6 +355,7 @@
       <label class="toggle"><input type="checkbox" id="setUpdate" checked><span class="sw"></span><div><b>Keep the downloader up to date</b><em>Checks for a new yt-dlp at startup. Twitch changes break old versions</em></div></label>
       <div class="fld" style="margin-top:12px"><span>Text translator <em>for two-step translation and chat</em></span>
         <div class="seg full" id="trSeg"><button data-v="better" class="on">Better (2.7 GB)</button><button data-v="standard">Standard (1.2 GB)</button></div></div>
+      <div class="upd-row"><span>GPU libraries, models and FFmpeg</span><button class="btn ghost sm" id="openSetup">Open setup</button></div>
       <div class="upd-row"><span id="updText">yt-dlp —</span><button class="btn ghost sm" id="updBtn">Check now</button></div>
     </div>
   </div>
@@ -392,6 +393,18 @@
       </div>
       <div class="ed-list" id="edList"></div>
     </div>
+  </div>
+</div>
+
+<!-- ================================================================ SETUP -->
+<div class="modal" id="setup" hidden>
+  <div class="ed setup-box">
+    <div class="ed-head">
+      <div><div class="eyebrow">Setup</div><h3>Get StreamTranslator ready</h3>
+        <div class="muted small" style="margin:4px 0 0">Anything already on this PC is reused. Downloads are one-time.</div></div>
+      <div class="row"><button class="btn primary" id="setupAll">Download what's needed</button><button class="btn ghost" id="setupClose">Done</button></div>
+    </div>
+    <div class="setup-list" id="setupList"></div>
   </div>
 </div>
 

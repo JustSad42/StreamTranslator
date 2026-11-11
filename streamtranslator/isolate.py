@@ -71,14 +71,18 @@ def _get_session():
             opts = ort.SessionOptions()
             opts.log_severity_level = 3
             providers: list = ["CPUExecutionProvider"]
-            if "CUDAExecutionProvider" in ort.get_available_providers():
-                # Keep GPU memory small and fixed. Without this onnxruntime grabs several GB and
-                # keeps it, Windows starts swapping GPU memory and Whisper slows to a crawl.
+            avail = ort.get_available_providers()
+            if "DmlExecutionProvider" in avail:
+                # DirectML: Windows' own GPU layer. Works on any GPU and needs no CUDA libraries.
+                opts.enable_mem_pattern = False
+                opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+                providers.insert(0, "DmlExecutionProvider")
+            elif "CUDAExecutionProvider" in avail:
+                # Keep GPU memory small and fixed, or Windows swaps GPU memory and Whisper crawls.
                 providers.insert(0, ("CUDAExecutionProvider", {
                     "gpu_mem_limit": str(1536 * 1024 * 1024),
                     "arena_extend_strategy": "kSameAsRequested",
                     "cudnn_conv_algo_search": "HEURISTIC",
-                    "cudnn_conv_use_max_workspace": "0",
                 }))
             _session = ort.InferenceSession(str(MODEL_PATH), opts, providers=providers)
         return _session
@@ -94,7 +98,8 @@ def release():
 
 
 def device() -> str:
-    return "GPU" if "CUDAExecutionProvider" in _get_session().get_providers() else "CPU"
+    p = _get_session().get_providers()
+    return "GPU" if ("DmlExecutionProvider" in p or "CUDAExecutionProvider" in p) else "CPU"
 
 
 # ---------------------------------------------------------------- spectrograms (torch.stft/istft equivalents)

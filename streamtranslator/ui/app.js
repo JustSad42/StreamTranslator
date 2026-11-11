@@ -132,6 +132,7 @@ async function boot() {
   S.settings = r.settings; S.gpu = r.gpu || ''; S.scale = r.scale; S.update = r.update || {};
   applyGloss(r.glossary);
   initClip(); initLive(); initGlossary(); initSettings(); initHistory(); initEditor();
+  initSetup(r.components, r.setup_needed && !r.settings.setup_done || (r.components && !r.components.gpu.ok && r.components.has_nvidia));
   if (r.queue && r.queue.length) renderQueue(r.queue);
   if (!r.ffmpeg) toast('ffmpeg was not found. Install it with:  winget install Gyan.FFmpeg', 'bad', 15000);
   S.model.name = r.model.name;
@@ -1041,4 +1042,82 @@ function onBurnDone(m, err) {
     const st = $('#edState'); st.innerHTML = ''; st.append('Video updated ✓ ', h('button', { class: 'btn ghost sm', onclick: () => api('os.open', { path: m.subbed }) }, 'Play'));
     if (S.lastResult && S.lastResult.folder === m.folder) S.lastResult.subbed = m.subbed;
   } else $('#edState').textContent = 'Burning failed or was cancelled.';
+}
+
+/* ================================================================ SETUP / COMPONENTS */
+const SETUP = { st: null, busy: {} };
+function initSetup(comp, needed) {
+  SETUP.st = comp;
+  $('#openSetup').onclick = () => openSetup();
+  $('#setupClose').onclick = async () => { $('#setup').hidden = true; await api('setup.done'); };
+  $('#setupAll').onclick = setupAll;
+  if (needed) openSetup();
+}
+async function openSetup() {
+  $('#setup').hidden = false;
+  try { SETUP.st = await api('components.status'); } catch { }
+  renderSetup();
+}
+function srow(id, ok, title, sub, acts, need) {
+  const busy = SETUP.busy[id];
+  return h('div', { class: 'srow ' + (ok ? 'ok' : need ? 'need' : ''), id: 'srow-' + id },
+    h('span', { class: 'st' }, ok ? '✓' : need ? '!' : '–'),
+    h('div', {}, h('b', {}, title), h('div', { class: 'sub' }, busy ? busy.text : sub),
+      busy ? h('div', { class: 'bar' }, h('div', { class: 'bar-fill', style: `width:${Math.round(busy.f * 100)}%` })) : null),
+    h('div', { class: 'acts' }, busy ? null : acts));
+}
+function dl(what, name, label) {
+  return h('button', { class: 'btn primary sm', onclick: () => startDl(what, name) }, label);
+}
+function startDl(what, name) {
+  const id = what + (name ? '-' + name : '');
+  SETUP.busy[id] = { f: 0, text: 'Starting…' }; renderSetup();
+  api('components.download', { what, name });
+}
+on('comp.progress', m => { const id = m.what + (m.name ? '-' + m.name : ''); SETUP.busy[id] = { f: Math.max(0, m.f), text: m.text }; renderSetupRow(id); });
+on('comp.done', m => { delete SETUP.busy[m.what + (m.name ? '-' + m.name : '')]; SETUP.st = m.status; renderSetup(); toast(`${m.what === 'gpu' ? 'GPU libraries' : 'Download'} ready`, 'good', 2500);
+  if (m.what === 'whisper' || m.what === 'gpu') api('model.preload', { name: S.settings.model }).catch(() => { }); });
+on('comp.error', m => { delete SETUP.busy[m.what + (m.name ? '-' + m.name : '')]; renderSetup(); toast(m.message, 'bad', 9000); });
+function renderSetupRow(id) {
+  const el = $('#srow-' + id), b = SETUP.busy[id]; if (!el || !b) return renderSetup();
+  const sub = $('.sub', el); if (sub) sub.textContent = b.text;
+  const fill = $('.bar-fill', el); if (fill) fill.style.width = Math.round(b.f * 100) + '%'; else renderSetup();
+}
+function renderSetup() {
+  const st = SETUP.st; if (!st) return;
+  const L = $('#setupList'); L.innerHTML = '';
+  const g = st.gpu;
+  L.append(srow('gpu', g.ok, 'NVIDIA GPU libraries (cuBLAS + cuDNN)',
+    !st.has_nvidia ? 'No NVIDIA GPU found. Whisper will run on the CPU, which is much slower.' :
+      g.ok ? `Ready: ${g.source}${g.dir ? ' · ' + g.dir : ''}` : 'Needed to run Whisper on your GPU. About 1.3 GB from NVIDIA (via PyPI), checksum-verified.',
+    g.ok || !st.has_nvidia ? null : dl('gpu', '', 'Download 1.3 GB'), st.has_nvidia && !g.ok));
+  const w = st.models.whisper, sel = st.selected_model;
+  const wOk = sel === 'custom' ? !!st.custom_model : !!(w[sel] && w[sel].ok);
+  L.append(srow('whisper-' + sel, wOk, 'Whisper speech model',
+    sel === 'custom' ? `Using your folder: ${st.custom_model}` :
+      Object.entries(w).map(([k, v]) => `${v.label}${v.ok ? ' ✓' : ` (${v.gb} GB)`}`).join(' · ') + ` · selected: ${(w[sel] || {}).label || sel}`,
+    [!wOk && w[sel] ? dl('whisper', sel, `Download ${w[sel].label} (${w[sel].gb} GB)`) : null,
+     !w['large-v3-turbo'].ok ? h('button', { class: 'btn ghost sm', onclick: () => startDl('whisper', 'large-v3-turbo') }, 'Add Turbo (1.6 GB)') : null,
+     h('button', { class: 'btn ghost sm', title: 'A faster-whisper (CTranslate2) model folder from another tool', onclick: pickModelFolder }, 'Use a folder I have')], !wOk));
+  const t = st.models.translator, tr = st.translator;
+  L.append(srow('translator-' + tr, t[tr].ok, `Text translator (${tr === 'better' ? 'Better, 1.3B' : 'Standard, 600M'})`,
+    t[tr].ok ? 'Ready. Used for two-step translation and chat.' : `For two-step translation and chat. ${t[tr].gb} GB. You can switch size in Settings.`,
+    t[tr].ok ? null : dl('translator', tr, `Download ${t[tr].gb} GB`), !t[tr].ok));
+  const iso = st.models.isolation;
+  L.append(srow('isolation', iso.ok, 'Voice isolation model (optional)',
+    iso.ok ? 'Ready.' : 'Removes game sound and music before Whisper listens. 66 MB.', iso.ok ? null : dl('isolation', '', 'Download 66 MB'), false));
+  const f = st.ffmpeg;
+  L.append(srow('ffmpeg', f.ok, 'FFmpeg (video and audio)', f.ok ? `Ready: ${f.source}` : 'Not found. Install it with: winget install Gyan.FFmpeg',
+    f.ok ? null : h('button', { class: 'btn ghost sm', onclick: () => { api('os.copy', { text: 'winget install Gyan.FFmpeg' }); toast('Command copied', 'good', 1500); } }, 'Copy command'), !f.ok));
+}
+async function pickModelFolder() {
+  try { const st = await api('components.model_folder'); if (st) { SETUP.st = st; S.settings.model = 'custom'; S.settings.custom_model = st.custom_model; renderSetup(); toast('Using your model folder', 'good', 2500); } }
+  catch (e) { toast(e.message, 'bad', 9000); }
+}
+function setupAll() {
+  const st = SETUP.st; if (!st) return;
+  if (st.has_nvidia && !st.gpu.ok && !SETUP.busy.gpu) startDl('gpu', '');
+  const sel = st.selected_model;
+  if (sel !== 'custom' && st.models.whisper[sel] && !st.models.whisper[sel].ok) startDl('whisper', sel);
+  if (!st.models.translator[st.translator].ok) startDl('translator', st.translator);
 }

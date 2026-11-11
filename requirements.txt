@@ -1,13 +1,12 @@
 PySide6
 yt-dlp
 faster-whisper
-nvidia-cublas-cu12
-nvidia-cudnn-cu12==9.*
-nvidia-cuda-runtime-cu12
-nvidia-cufft-cu12
-nvidia-curand-cu12
-# GPU voice isolation; 1.22 is the last release built for CUDA 12 (newer ones need CUDA 13)
-onnxruntime-gpu==1.22.0
+# GPU libraries for Whisper (dev only; the installed app downloads these on first run)
+nvidia-cublas-cu12==12.9.2.10
+nvidia-cudnn-cu12==9.28.1.4
+# voice isolation on any GPU through Windows' DirectML
+onnxruntime-directml
+opencv-python-headless
 sentencepiece
 winrt-runtime
 winrt-Windows.Media.Ocr

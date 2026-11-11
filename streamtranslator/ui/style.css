@@ -468,3 +468,14 @@ body.dragging .drop-hint{opacity:1}
 .duo{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
 .duo .live-feed,.duo .chat-feed{height:420px}
 @media (max-width:1400px){.duo{grid-template-columns:1fr}}
+/* setup */
+.setup-box{width:min(92vw,900px);height:auto;max-height:90vh}
+.setup-list{padding:14px 20px 20px;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+.srow{display:grid;grid-template-columns:28px 1fr auto;gap:14px;align-items:center;padding:14px;border-radius:14px;background:var(--panel);border:1px solid var(--line)}
+.srow .st{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:800;background:rgba(255,255,255,.08)}
+.srow.ok .st{background:var(--good);color:#06150f}
+.srow.need .st{background:var(--warn);color:#1a1300}
+.srow b{display:block;font-size:14.5px}
+.srow .sub{font-size:13px;color:var(--muted)}
+.srow .acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.srow .bar{margin-top:8px;height:6px}

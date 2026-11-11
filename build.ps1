@@ -49,4 +49,4 @@ $app = (Get-ChildItem dist\StreamTranslator -Recurse | Measure-Object Length -Su
 Remove-Item -Recurse -Force build, dist\StreamTranslator -ErrorAction SilentlyContinue
 
 Write-Host ("`nDone: {0} ({1:N0} MB installer, {2:N0} MB installed)" -f $setup.FullName, ($setup.Length / 1MB), ($app / 1MB)) -ForegroundColor Green
-Write-Host "Double-click it to install (per user, no admin). It needs FFmpeg and an NVIDIA GPU."
+Write-Host "Double-click it to install (per user, no admin). On first run the app sets up GPU libraries and models."

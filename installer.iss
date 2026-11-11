@@ -47,8 +47,8 @@ VersionInfoDescription={#AppName} Setup
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Messages]
-WelcomeLabel2=This will install [name/ver] on your computer.%n%nTranslate other streamers' VODs and live streams into English with Whisper running on your own NVIDIA GPU.%n%nNo administrator rights are needed. You also need FFmpeg (winget install Gyan.FFmpeg).
-FinishedLabel=[name] is installed. Find it in the Start menu. The first translation downloads the Whisper model (about 3 GB) once.
+WelcomeLabel2=This will install [name/ver] on your computer.%n%nTranslate other streamers' VODs and live streams into English with Whisper running on your own NVIDIA GPU.%n%nNo administrator rights are needed. On first run, a setup screen downloads the GPU libraries and models it needs (reusing anything already on this PC).
+FinishedLabel=[name] is installed. Find it in the Start menu. The first time it opens, a setup screen gets the GPU libraries and models ready.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "Extras:"; Flags: unchecked
@@ -70,3 +70,5 @@ Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags
 ; downloaded yt-dlp updates and models. Settings, history and glossary in %APPDATA%\StreamTranslator are kept.
 Type: filesandordirs; Name: "{localappdata}\StreamTranslator\pylib"
 Type: filesandordirs; Name: "{localappdata}\StreamTranslator\models"
+Type: filesandordirs; Name: "{localappdata}\StreamTranslator\cuda"
+Type: filesandordirs; Name: "{localappdata}\StreamTranslator\icons"
