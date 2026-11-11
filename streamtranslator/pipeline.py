@@ -640,7 +640,9 @@ def run_job(p: JobParams, cb: Callbacks) -> JobResult:
     from .glossary import Glossary
     gl = Glossary.get()
     if det_thread:
-        det_thread.join(timeout=120)
+        det_thread.join(timeout=20)          # don't hold up a short clip; long ones finish downloading first
+        if det_thread.is_alive():
+            cb.log("Still reading champions/players from the video; skipping that for this clip.")
         if details.get("champions") or details.get("players"):
             cb.log("Read from the game: " + ", ".join(details.get("champions", []) + details.get("players", [])))
     champs = list(dict.fromkeys(list(p.champions) + details.get("champions", [])))

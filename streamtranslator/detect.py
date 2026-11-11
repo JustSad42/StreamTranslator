@@ -108,7 +108,8 @@ def champions_in(frames: list[np.ndarray]) -> list[tuple[str, float]]:
 _HUD_WORDS = {"patch", "live", "replay", "semifinals", "finals", "quarterfinals", "baron", "dragon", "elder",
               "herald", "gold", "kills", "towers", "victory", "defeat", "worlds", "msi", "nearsighted", "game",
               "lck", "lpl", "lec", "lcs", "ljl", "pcs", "vcs", "cblol", "lta", "blg", "geng", "hle", "jdg", "tes",
-              "kc", "fnc", "g2", "t1", "kt", "dk", "drx", "fox", "ns", "bro"}
+              "kc", "fnc", "g2", "t1", "kt", "dk", "drx", "fox", "ns", "bro", "you", "the", "and", "for", "all",
+              "team", "red", "blue", "level", "shop", "ping", "fps", "stats", "kda", "subs", "follow", "donate"}
 
 
 def players_in(ocr_lines: list[list[str]]) -> list[str]:

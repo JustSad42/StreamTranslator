@@ -116,6 +116,14 @@ function setSetting(k, v) { S.settings[k] = v; saveSettings(); }
 window.addEventListener('DOMContentLoaded', () => {
   new QWebChannel(qt.webChannelTransport, ch => { backend = ch.objects.backend; backend.event.connect(dispatch); boot(); });
 });
+let methodSeg, liveMethod, trSeg;
+function syncTurbo() {
+  // Turbo can only write down speech, not translate it, so it needs the two-step method
+  const whisperOnly = methodSeg.get() === 'whisper';
+  const turbo = $('#modelSeg [data-v="large-v3-turbo"]'); turbo.disabled = whisperOnly; turbo.title = whisperOnly ? 'Turbo needs the two-step method' : 'About 3x faster, slightly less accurate';
+  if (whisperOnly && modelSeg.get() === 'large-v3-turbo') { modelSeg.set('large-v3'); setSetting('model', 'large-v3'); }
+  $('#methodHint').textContent = whisperOnly ? 'Whisper translates directly (the original method)' : 'Whisper writes it down, then a translator turns it into English';
+}
 let nav, srcMode, modelSeg, qualSeg, sizeSeg, liveModel, champsClip, champsLive, customWords, syncTheirs;
 
 async function boot() {
@@ -177,6 +185,9 @@ function initClip() {
   $('#burnTog').checked = st.burn; $('#burnTog').onchange = e => setSetting('burn', e.target.checked);
   $('#origTog').checked = st.orig; $('#origTog').onchange = e => setSetting('orig', e.target.checked);
   $('#glossClip').checked = st.use_glossary; $('#glossClip').onchange = e => setSetting('use_glossary', e.target.checked);
+  methodSeg = seg($('#methodSeg'), v => { setSetting('method', v); syncTurbo(); }); methodSeg.set(st.method || 'two-step');
+  $('#autoClip').checked = st.auto_details; $('#autoClip').onchange = e => setSetting('auto_details', e.target.checked);
+  syncTurbo();
   $('#isoClip').checked = st.isolate; $('#isoClip').onchange = e => setSetting('isolate', e.target.checked);
   $('#snapBtn').onclick = runSnap;
   $('#queueClear').onclick = () => api('queue.clear');
@@ -463,7 +474,7 @@ async function runSnap() {
 on('snap.progress', m => { const b = $('#snapBtn'); if (b.classList.contains('running')) $('span', b).textContent = `${m.text.replace('…', '')} · ${Math.round(m.f * 100)}%`; });
 
 /* ---------- job queue ---------- */
-const STEP_NAMES = { 'Reading VOD info': 'Info', 'Downloading section': 'Download', 'Loading Whisper': 'Whisper', 'Isolating voices': 'Voices', 'Detecting language': 'Language', 'Translating to English': 'Translate', 'Transcribing original language': 'Original', 'Burning subtitles into video': 'Subtitles' };
+const STEP_NAMES = { 'Reading VOD info': 'Info', 'Downloading section': 'Download', 'Downloading audio': 'Audio', 'Transcribing speech': 'Transcribe', 'Loading Whisper': 'Whisper', 'Isolating voices': 'Voices', 'Detecting language': 'Language', 'Translating to English': 'Translate', 'Transcribing original language': 'Original', 'Burning subtitles into video': 'Subtitles' };
 S.jobs = {};
 S.viewJob = null;
 const J = id => (S.jobs[id] = S.jobs[id] || { steps: [], lines: [], start: 0, f: -1, stage: 0 });
@@ -472,13 +483,15 @@ function jobParams(vod, lo, hi) {
   return { url: vod.url, vod_id: vod.id, start: lo, end: hi, out_dir: S.settings.out_dir, quality: qualSeg.get(), model: modelSeg.get(),
     language: $('#langSel').value, orig: $('#origTog').checked, burn: $('#burnTog').checked, position: $('#posPick .on').dataset.v,
     size: sizeSeg.get(), champions: champsClip.get(), use_glossary: $('#glossClip').checked, isolate: $('#isoClip').checked,
+    method: methodSeg.get(), auto_details: $('#autoClip').checked,
     label: `${vod.channel} · ${fmt(lo)}–${fmt(hi)}` };
 }
 function stepsFor(p) {
-  const s = ['Reading VOD info', 'Downloading section', 'Loading Whisper'];
+  const s = ['Reading VOD info', p.burn ? 'Downloading section' : 'Downloading audio', 'Loading Whisper'];
   if (p.isolate) s.push('Isolating voices');
-  s.push('Detecting language', 'Translating to English');
-  if (p.orig) s.push('Transcribing original language');
+  s.push('Detecting language');
+  if (p.method === 'two-step') s.push('Transcribing speech', 'Translating to English');
+  else { s.push('Translating to English'); if (p.orig) s.push('Transcribing original language'); }
   if (p.burn) s.push('Burning subtitles into video');
   return s;
 }
@@ -618,6 +631,7 @@ function initLive() {
   $('#liveLang').value = st.live_language || '';
   $('#liveLang').onchange = e => { setSetting('live_language', e.target.value); if (S.live.on) api('live.update', { language: e.target.value }); };
   liveModel = seg($('#liveModelSeg'), v => setSetting('live_model', v)); liveModel.set(st.live_model);
+  liveMethod = seg($('#liveMethodSeg'), v => { setSetting('live_method', v); if (S.live.on) api('live.update', { method: v }); }); liveMethod.set(st.live_method || 'two-step');
   $('#liveOrig').checked = st.live_orig; $('#liveOrig').onchange = e => { setSetting('live_orig', e.target.checked); if (S.live.on) api('live.update', { orig: e.target.checked }); };
   $('#liveGloss').onchange = e => S.live.on && api('live.update', { use_glossary: e.target.checked });
   $('#liveIso').checked = st.live_isolate;
@@ -660,7 +674,7 @@ async function toggleLive() {
   $('#liveState').textContent = 'Connecting…';
   try {
     await api('live.start', { source, model: liveModel.get(), language: $('#liveLang').value, orig: $('#liveOrig').checked, use_glossary: $('#liveGloss').checked,
-      champions: champsLive.get(), isolate: $('#liveIso').checked, chat: $('#liveChat').checked });
+      champions: champsLive.get(), isolate: $('#liveIso').checked, method: liveMethod.get(), chat: $('#liveChat').checked });
     if ($('#liveChat').checked) { $('#chatFeed').innerHTML = ''; $('#chatStatus').textContent = 'Connecting to chat…'; }
   } catch (e) { toast(e.message, 'bad'); S.live.starting = false; liveButton(false); }
 }
@@ -768,6 +782,7 @@ function initSettings() {
   $('#setChannel').oninput = e => setSetting('my_channel', e.target.value.trim().replace(/^.*twitch\.tv\//, '').replace(/\/.*$/, ''));
   $('#setOut').value = st.out_dir; $('#setOutBtn').onclick = browseOut;
   $('#setPreload').checked = st.preload; $('#setPreload').onchange = e => setSetting('preload', e.target.checked);
+  trSeg = seg($('#trSeg'), v => setSetting('translator', v)); trSeg.set(st.translator || 'better');
   $('#setNotify').checked = st.notify; $('#setNotify').onchange = e => setSetting('notify', e.target.checked);
   $('#setUpdate').checked = st.auto_update; $('#setUpdate').onchange = e => setSetting('auto_update', e.target.checked);
   $('#updBtn').onclick = async () => { const b = $('#updBtn'); b.classList.add('busy'); try { showUpdate(await api('update.check'), true); } catch (e) { toast(e.message, 'bad'); } finally { b.classList.remove('busy'); } };
@@ -924,6 +939,10 @@ async function openEditor(folder, title) {
     ED.position = r.meta.position || 'Above game HUD'; ED.size = r.meta.size || 'Medium'; edPos.set(ED.position); edSize.set(ED.size);
     $('#edTitle').textContent = `${r.meta.channel} · ${fmt(r.meta.start)} – ${fmt(r.meta.end)}`;
     const vid = $('#edVideo');
+    vid.poster = r.poster || '';
+    ED.audioOnly = !!r.meta.audio_only;
+    $('#edBurn').disabled = ED.audioOnly; $('#edBurn').title = ED.audioOnly ? 'This job only downloaded audio, so there is no video to burn into' : '';
+    if (ED.audioOnly) $('#edState').textContent = 'Subtitles-only job: edit and save the .srt (no video to burn).';
     vid.onloadeddata = () => { $('#edLoading').hidden = true; paintSub(); };
     vid.onerror = () => { $('#edLoading span').textContent = "This video can't play in the editor, but you can still edit the text."; };
     vid.src = r.video;

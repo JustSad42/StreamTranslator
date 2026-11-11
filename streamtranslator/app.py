@@ -40,6 +40,7 @@ DEFAULTS = {
     "size": "Medium", "burn": True, "orig": False, "language": "", "use_glossary": True, "isolate": False,
     "live_language": "", "live_orig": True, "live_isolate": False, "live_chat": True,
     "overlay_font": 30, "overlay_bg": 0.55, "ui_scale": "auto", "notify": True, "auto_update": True,
+    "method": "two-step", "translator": "better", "auto_details": True, "live_method": "two-step",
 }
 # Methods that touch Qt widgets must run on the UI thread.
 MAIN_THREAD = {"os.browse", "os.copy", "os.clipboard", "overlay.show", "overlay.style", "obs.url", "ui.scale"}
@@ -365,7 +366,9 @@ class Backend(QObject):
                            burn=bool(p.get("burn", True)), position=p.get("position", "Above game HUD"),
                            font_size=p.get("size", "Medium"), champions=p.get("champions") or [],
                            use_glossary=bool(p.get("use_glossary", True)), isolate=bool(p.get("isolate")),
-                           label=job["label"])
+                           label=job["label"], method=p.get("method", "two-step"),
+                           translator=self.settings.get("translator", "better"),
+                           auto_details=bool(p.get("auto_details", True)))
         r = run_job(params, cb)
         self.emit("model.status", state="ready", name=params.model, device=model_device(params.model))
         m = r.meta
@@ -402,25 +405,31 @@ class Backend(QObject):
         clip = folder_p / meta["clip"]
         if not clip.exists():
             raise JobError("The clip file for these subtitles is missing.")
-        video = clip if h264 else folder_p / "preview.webm"
-        if not h264 and not video.exists():
-            self._make_preview(clip, video, av1, max(1.0, meta["end"] - meta["start"]))
-        return {"cues": cues, "video": file_url(video), "meta": meta, "folder": folder}
+        audio_only = bool(meta.get("audio_only"))
+        video = clip if (h264 and not audio_only) else folder_p / "preview.webm"
+        if not video.exists():
+            self._make_preview(clip, video, av1, max(1.0, meta["end"] - meta["start"]), audio_only)
+        thumb = folder_p / meta["thumb"] if meta.get("thumb") else None
+        return {"cues": cues, "video": file_url(video), "meta": meta, "folder": folder,
+                "poster": file_url(thumb) if thumb and thumb.exists() else None}
 
-    def _make_preview(self, clip: Path, out: Path, av1: bool, dur: float):
+    def _make_preview(self, clip: Path, out: Path, av1: bool, dur: float, audio_only: bool = False):
         """This browser engine can't play H.264, so make a quick WebM copy for the editor."""
         from .pipeline import run_ffmpeg
         cancel = threading.Event()
         prog = lambda f: self.emit("subs.progress", f=round(f, 3))
         tmp = out.with_name("preview.part.webm")
         tries = []
-        if av1:
+        if audio_only:      # nothing to show: just a small audio track for the editor
+            tries.append(["-c:a", "libopus"])
+        elif av1:
             tries.append(["-c:v", "av1_nvenc", "-preset", "p2", "-cq", "38"])
         tries.append(["-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", "-b:v", "1500k", "-threads", "8"])
         last = None
         for enc in tries:
             try:
-                run_ffmpeg(["-i", str(clip), "-vf", "scale=-2:540", *enc, "-c:a", "libopus", "-b:a", "96k",
+                video = ["-vn"] if audio_only else ["-vf", "scale=-2:540"]
+                run_ffmpeg(["-i", str(clip), *video, *enc, "-c:a", "libopus", "-b:a", "96k",
                             str(tmp)], dur, prog, cancel)
                 tmp.replace(out)
                 return
@@ -471,7 +480,9 @@ class Backend(QObject):
                                        language=p.get("language") or None, show_original=bool(p.get("orig", True)),
                                        use_glossary=bool(p.get("use_glossary", True)),
                                        champions=p.get("champions") or [], save_dir=Path(self.settings["out_dir"]),
-                                       emit=self._live_emit, isolate=bool(p.get("isolate")))
+                                       emit=self._live_emit, isolate=bool(p.get("isolate")),
+                                       method=p.get("method", "two-step"),
+                                       translator=self.settings.get("translator", "better"))
         live.start()
         if p.get("chat", True):
             kind, value = classify(p["source"])
@@ -500,7 +511,8 @@ class Backend(QObject):
         if self.chat:
             self.chat.stop()
         live = self.live
-        self.chat = ChatSession(channel, lambda: (live.locked_lang or live.language) if live else None, self.emit)
+        self.chat = ChatSession(channel, lambda: (live.locked_lang or live.language) if live else None, self.emit,
+                                size=self.settings.get("translator", "better"))
         self.chat.start()
 
     def m_chat_toggle(self, on: bool):
@@ -529,7 +541,8 @@ class Backend(QObject):
         if self.live:
             self.live.update(language=(p["language"] or None) if "language" in p else ...,
                              show_original=p.get("orig"), champions=p.get("champions"),
-                             use_glossary=p.get("use_glossary"), isolate=p.get("isolate"))
+                             use_glossary=p.get("use_glossary"), isolate=p.get("isolate"),
+                             method=p.get("method"))
         return True
 
     def m_overlay_show(self, show: bool):

@@ -15,15 +15,7 @@ import threading
 import time
 from typing import Callable
 
-NLLB_REPO = "JustFrederik/nllb-200-distilled-600M-ct2-float16"
-NLLB_CODES = {
-    "ar": "arb_Arab", "bg": "bul_Cyrl", "cs": "ces_Latn", "da": "dan_Latn", "de": "deu_Latn", "el": "ell_Grek",
-    "es": "spa_Latn", "fi": "fin_Latn", "fr": "fra_Latn", "he": "heb_Hebr", "hi": "hin_Deva", "hr": "hrv_Latn",
-    "hu": "hun_Latn", "id": "ind_Latn", "it": "ita_Latn", "ja": "jpn_Jpan", "ko": "kor_Hang", "lt": "lit_Latn",
-    "ms": "zsm_Latn", "nl": "nld_Latn", "no": "nob_Latn", "pl": "pol_Latn", "pt": "por_Latn", "ro": "ron_Latn",
-    "ru": "rus_Cyrl", "sk": "slk_Latn", "sr": "srp_Cyrl", "sv": "swe_Latn", "th": "tha_Thai", "tl": "tgl_Latn",
-    "tr": "tur_Latn", "uk": "ukr_Cyrl", "vi": "vie_Latn", "zh": "zho_Hans",
-}
+from .translate import NLLB_CODES, Translator  # noqa: F401  (shared with two-step speech translation)
 # Common third-party emotes (7TV/BTTV/FFZ) that Twitch doesn't tag.
 EMOTES = set("""KEKW OMEGALUL LUL LULW Pog PogU PogChamp POGGERS Poggers monkaS monkaW Sadge Copium COPIUM Aware
 Clueless Kappa KappaPride ResidentSleeper PepeHands PepeLaugh peepoHappy FeelsBadMan FeelsGoodMan FeelsStrongMan
@@ -65,47 +57,12 @@ def is_english(text: str) -> bool:
     return sum(w in ENGLISH for w in words) / len(words) >= 0.4
 
 
-class Translator:
-    _inst = None
-    _lock = threading.Lock()
-
-    @classmethod
-    def get(cls, status: Callable[[str], None] = lambda s: None) -> "Translator":
-        with cls._lock:
-            if cls._inst is None:
-                cls._inst = Translator(status)
-            return cls._inst
-
-    def __init__(self, status):
-        from huggingface_hub import snapshot_download
-        from . import cuda
-        cuda.setup()
-        import ctranslate2
-        import sentencepiece as spm
-        try:
-            path = snapshot_download(NLLB_REPO, local_files_only=True)
-        except Exception:
-            status("Downloading the chat translator (about 1.2 GB, one time)…")
-            path = snapshot_download(NLLB_REPO, allow_patterns=["*.bin", "*.json", "*.model", "*.txt"])
-        dev = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
-        self.model = ctranslate2.Translator(path, device=dev, compute_type="float16" if dev == "cuda" else "int8")
-        self.sp = spm.SentencePieceProcessor(model_file=f"{path}/sentencepiece.bpe.model")
-        self.device = dev.upper().replace("CUDA", "GPU")
-
-    def translate(self, texts: list[str], src: str) -> list[str]:
-        code = NLLB_CODES.get(src)
-        if not code or not texts:
-            return texts
-        batch = [[code] + self.sp.encode(t, out_type=str) + ["</s>"] for t in texts]
-        res = self.model.translate_batch(batch, target_prefix=[["eng_Latn"]] * len(batch),
-                                         beam_size=2, max_decoding_length=200)
-        return [self.sp.decode(r.hypotheses[0][1:]) for r in res]
-
-
 class ChatSession:
     """Join a Twitch channel's chat and emit translated messages."""
 
-    def __init__(self, channel: str, get_lang: Callable[[], str | None], emit: Callable[..., None]):
+    def __init__(self, channel: str, get_lang: Callable[[], str | None], emit: Callable[..., None],
+                 size: str = "better"):
+        self.size = size
         self.channel = channel.lower().lstrip("#")
         self.get_lang = get_lang
         self.emit = emit
@@ -192,7 +149,7 @@ class ChatSession:
     # ---- translation
     def _worker(self):
         try:
-            tr = Translator.get(lambda s: self.emit("chat.status", state="loading", message=s, channel=self.channel))
+            tr = Translator.get(self.size, lambda s: self.emit("chat.status", state="loading", message=s, channel=self.channel))
             self.emit("chat.status", state="ready", channel=self.channel, device=tr.device)
         except Exception as e:
             self.emit("chat.status", state="error", message=f"Chat translator failed to load: {e}", channel=self.channel)

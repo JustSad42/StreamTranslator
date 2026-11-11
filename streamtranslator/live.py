@@ -71,8 +71,11 @@ def resolve_live(text: str) -> dict:
 class LiveSession:
     def __init__(self, source: str, model: str, language: str | None, show_original: bool,
                  use_glossary: bool, champions: list[str], save_dir: Path,
-                 emit: Callable[..., None], isolate: bool = False):
+                 emit: Callable[..., None], isolate: bool = False, method: str = "two-step",
+                 translator: str = "better"):
         self.isolate = isolate
+        self.method = method
+        self.translator = translator
         self.last_frame: bytes | None = None
         self.thumb_path: Path | None = None
         self.source = source
@@ -109,9 +112,12 @@ class LiveSession:
         if self._proc and self._proc.poll() is None:
             self._proc.kill()
 
-    def update(self, language=..., show_original=None, champions=None, use_glossary=None, isolate=None):
+    def update(self, language=..., show_original=None, champions=None, use_glossary=None, isolate=None,
+               method=None):
         if isolate is not None:
             self.isolate = isolate
+        if method is not None:
+            self.method = method
         if language is not ...:
             self.language = language
             self.locked_lang = language
@@ -342,29 +348,51 @@ class LiveSession:
                 parts.append(t)
         return " ".join(parts)
 
+    def _two_step(self, lang: str) -> bool:
+        from . import translate
+        return self.method == "two-step" and lang != "en" and translate.supported(lang)
+
+    def _to_english(self, text: str, lang: str, beam: int) -> str:
+        from .translate import Translator
+        tr = Translator.get(self.translator, lambda s: self.emit("live.status", state="live", message=s))
+        return tr.translate([text], lang, beam=beam)[0]
+
+    def _speech(self, chunk, lang: str, beam: int) -> tuple[str, str]:
+        """(english, original) for a chunk, with either method."""
+        if self._two_step(lang):
+            from .glossary import Glossary
+            hot = Glossary.get().hotwords(self.champions, core=False) if self.use_glossary else None
+            orig = self._transcribe(chunk, lang, "transcribe", beam, hot)
+            if not orig:
+                return "", ""
+            return self._fix(self._to_english(orig, lang, 2 if beam == 1 else 4), True), self._fix(orig, False)
+        task = "transcribe" if lang == "en" else "translate"
+        text = self._transcribe(chunk, lang, task, beam, self._hot())
+        if not text:
+            return "", ""
+        orig = ""
+        if beam > 1 and self.show_original and lang != "en":
+            orig = self._fix(self._transcribe(chunk, lang, "transcribe", 3, None), False)
+        return self._fix(text, True), orig
+
     def _partial(self, buf):
         lang = self.locked_lang
         if not lang:
             return
-        task = "transcribe" if lang == "en" else "translate"
-        text = self._transcribe(self._clean(buf), lang, task, 1, self._hot())
+        text, _ = self._speech(self._clean(buf), lang, 1)
         if text and not self.stop_event.is_set():
-            self.emit("live.partial", text=self._fix(text, True))
+            self.emit("live.partial", text=text)
 
     def _final(self, chunk, start_sample, end_sample):
         t_proc = time.time()
         chunk = self._clean(chunk)
         lang = self._detect(chunk)
-        task = "transcribe" if lang == "en" else "translate"
-        hot = self._hot()
-        text = self._transcribe(chunk, lang, task, 5, hot)
+        text, orig = self._speech(chunk, lang, 5)
         if not text:
             self.emit("live.partial", text="")
             return
-        text = self._fix(text, True)
-        orig = ""
-        if self.show_original and lang != "en":
-            orig = self._fix(self._transcribe(chunk, lang, "transcribe", 3, None), False)
+        if not self.show_original:
+            orig = ""
         with self._lock:
             received = self._received
         delay = (received - end_sample) / SR

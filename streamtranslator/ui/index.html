@@ -148,11 +148,15 @@
         <label class="fld"><span>Spoken language</span><select id="langSel"></select></label>
         <div class="fld"><span>Whisper model</span>
           <div class="seg full" id="modelSeg">
-            <button data-v="large-v3" class="on">Best</button><button data-v="medium">Fast</button><button data-v="small">Fastest</button>
+            <button data-v="large-v3" class="on">Best</button><button data-v="large-v3-turbo">Turbo</button><button data-v="medium">Fast</button><button data-v="small">Fastest</button>
           </div>
+        </div>
+        <div class="fld"><span>Method <em id="methodHint">Whisper writes it down, then a translator turns it into English</em></span>
+          <div class="seg full" id="methodSeg"><button data-v="two-step" class="on">Two-step (best)</button><button data-v="whisper">Whisper only</button></div>
         </div>
         <div class="fld"><span>Champions in this game <em>optional · helps Whisper</em></span><div class="chips-in" id="champsClip"></div></div>
         <label class="toggle"><input type="checkbox" id="glossClip" checked><span class="sw"></span><div><b>League glossary</b><em>Spell game terms and champions correctly</em></div></label>
+        <label class="toggle"><input type="checkbox" id="autoClip" checked><span class="sw"></span><div><b>Read champions and players from the video</b><em>Spots who's in the game and feeds their names to Whisper</em></div></label>
         <label class="toggle"><input type="checkbox" id="isoClip"><span class="sw"></span><div><b>Isolate voices</b><em>Remove game sound and music first. Best for loud teamfights</em></div></label>
       </div>
 
@@ -242,7 +246,10 @@
         <div class="eyebrow">Translation</div>
         <label class="fld"><span>Spoken language</span><select id="liveLang"></select></label>
         <div class="fld"><span>Whisper model</span>
-          <div class="seg full" id="liveModelSeg"><button data-v="large-v3" class="on">Best</button><button data-v="medium">Fast</button><button data-v="small">Fastest</button></div>
+          <div class="seg full" id="liveModelSeg"><button data-v="large-v3" class="on">Best</button><button data-v="large-v3-turbo">Turbo</button><button data-v="medium">Fast</button><button data-v="small">Fastest</button></div>
+        </div>
+        <div class="fld"><span>Method</span>
+          <div class="seg full" id="liveMethodSeg"><button data-v="two-step" class="on">Two-step (best)</button><button data-v="whisper">Whisper only</button></div>
         </div>
         <label class="toggle"><input type="checkbox" id="liveOrig" checked><span class="sw"></span><div><b>Show original language</b><em>Under each English line</em></div></label>
         <label class="toggle"><input type="checkbox" id="liveGloss" checked><span class="sw"></span><div><b>League glossary</b><em>Turn off for non-League streams</em></div></label>
@@ -346,6 +353,8 @@
       <div class="eyebrow">App</div>
       <label class="toggle"><input type="checkbox" id="setNotify" checked><span class="sw"></span><div><b>Windows notifications</b><em>When a translation or queue finishes while you're in another window</em></div></label>
       <label class="toggle"><input type="checkbox" id="setUpdate" checked><span class="sw"></span><div><b>Keep the downloader up to date</b><em>Checks for a new yt-dlp at startup. Twitch changes break old versions</em></div></label>
+      <div class="fld" style="margin-top:12px"><span>Text translator <em>for two-step translation and chat</em></span>
+        <div class="seg full" id="trSeg"><button data-v="better" class="on">Better (2.7 GB)</button><button data-v="standard">Standard (1.2 GB)</button></div></div>
       <div class="upd-row"><span id="updText">yt-dlp —</span><button class="btn ghost sm" id="updBtn">Check now</button></div>
     </div>
   </div>
