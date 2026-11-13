@@ -24,6 +24,12 @@ pub fn classify(text: &str) -> Result<(Kind, String), JobError> {
     if s.is_empty() {
         return Err(JobError("Paste a link or a channel name.".into()));
     }
+    if let Some(file) = crate::vod::local_video(s) {
+        return Ok((Kind::Vod, file.to_string_lossy().into_owned()));
+    }
+    if crate::vod::looks_like_path(s) {
+        return Err(JobError(format!("Couldn't find that file:\n{}", s.trim_matches('"'))));
+    }
     if s.chars().all(|c| c.is_ascii_digit()) {
         return Ok((Kind::Vod, format!("https://www.twitch.tv/videos/{s}")));
     }

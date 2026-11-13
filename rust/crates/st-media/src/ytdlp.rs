@@ -114,6 +114,15 @@ pub fn fetch_info(url: &str) -> Result<VodInfo> {
     if url.is_empty() {
         return job_err("Paste a VOD link first (Twitch, YouTube or Kick).");
     }
+    if let Some(file) = st_core::vod::local_video(&url) {
+        return crate::local::info(&file);
+    }
+    if st_core::vod::looks_like_path(&url) {
+        return job_err(format!("Couldn't find the video file:
+{}
+
+It may have been moved, renamed or deleted.", url.trim_matches('"')));
+    }
     if url.chars().all(|c| c.is_ascii_digit()) {
         url = format!("https://www.twitch.tv/videos/{url}");
     }

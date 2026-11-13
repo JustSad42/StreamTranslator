@@ -174,8 +174,10 @@ const TL = {};
 function initClip() {
   srcMode = seg($('#srcMode'), v => $$('#sourceCard .mode-pane').forEach(p => p.classList.toggle('on', p.dataset.mode === v)));
   $('#theirLoad').onclick = () => loadSource($('#theirInput').value);
+  $('#theirFile').onclick = pickVideo;
+  on('files.dropped', m => { const f = (m.paths || [])[0]; if (f) useVideoFile(f); });
   $('#theirInput').addEventListener('keydown', e => { if (e.key === 'Enter') loadSource(e.target.value); });
-  $('#theirInput').addEventListener('paste', () => setTimeout(() => { const v = $('#theirInput').value.trim(); if (VOD_RX.test(v) || /^\d{8,}$/.test(v)) loadSource(v); }, 30));
+  $('#theirInput').addEventListener('paste', () => setTimeout(() => { const v = $('#theirInput').value.trim(); if (VOD_RX.test(v) || /^\d{8,}$/.test(v) || isLocal(v)) loadSource(v); }, 30));
 
   // options
   const st = S.settings;
@@ -241,6 +243,20 @@ async function loadSource(text) {
   } catch (e) { toast(e.message, 'bad', 8000); }
   finally { btn.classList.remove('busy'); }
 }
+/* ---------- video files on this PC ---------- */
+const isLocal = u => /^"?([a-z]:[\\/]|\\\\|file:\/\/\/)/i.test((u || '').trim());
+async function pickVideo() {
+  try { const f = await api('os.pick_video'); if (f) useVideoFile(f); } catch (e) { toast(e.message, 'bad', 6000); }
+}
+function useVideoFile(path) {
+  if ($('#page-live').classList.contains('on')) { toast('Live mode needs a channel. Video files go in the Clip tab.', 'bad', 5000); return; }
+  showPage('clip'); srcMode.set('theirs'); $$('#sourceCard .mode-pane').forEach(p => p.classList.toggle('on', p.dataset.mode === 'theirs'));
+  $('#theirInput').value = path; loadSource(path);
+}
+async function loadStoryboard(v) {
+  if (v.site !== 'local' || v.storyboard) return;
+  try { const sb = await api('vod.storyboard', { id: v.id }); if (S.vod && S.vod.id === v.id) { S.vod.storyboard = sb; renderFilm(); } } catch { }
+}
 function vodGrid(root, login, vods, pick) {
   root.innerHTML = '';
   vods.forEach((v, i) => root.append(h('button', { class: 'vod-card', style: `animation-delay:${i * 35}ms`, onclick: () => pick(v) },
@@ -260,6 +276,8 @@ function setVod(v, range) {
   else { lo = 0; hi = Math.min(d, 1800); }
   Object.assign(S.tl, { dur: d, v0: 0, v1: d, lo, hi, active: 0 });
   requestAnimationFrame(() => { renderFilm(); renderTicks(); renderTL(); if (hi - lo < d * 0.08) zoomSel(); });
+  $('#vodOpen').title = v.site === 'local' ? 'Open the video file' : 'Open the VOD at the start';
+  loadStoryboard(v);
   commitRange(true);
   $('#goBtn').disabled = false;
   setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
@@ -500,13 +518,14 @@ function vodAt(url, id, t) {
   return url;
 }
 function stepsFor(p) {
-  const s = ['Reading VOD info', 'Downloading audio', 'Loading Whisper'];
+  const local = isLocal(p.url);
+  const s = [local ? 'Reading the video file' : 'Reading VOD info', local ? 'Cutting out the audio' : 'Downloading audio', 'Loading Whisper'];
   if (p.isolate) s.push('Isolating voices');
   s.push('Detecting language');
   if (p.method === 'two-step') s.push('Transcribing speech', 'Translating to English');
   else { s.push('Translating to English'); if (p.orig) s.push('Transcribing original language'); }
   if (p.speakers) s.push('Telling speakers apart');
-  if (p.burn) s.push('Downloading video', 'Burning subtitles into video');
+  if (p.burn) s.push(local ? 'Cutting out the video' : 'Downloading video', 'Burning subtitles into video');
   return s;
 }
 async function queueJobs(list) {
@@ -856,11 +875,16 @@ function renderAbout() {
 /* ---------- drag & drop links ---------- */
 function initDrop() {
   let depth = 0;
-  document.addEventListener('dragenter', e => { if ([...e.dataTransfer.types].some(t => t.startsWith('text'))) { depth++; document.body.classList.add('dragging'); } });
+  document.addEventListener('dragenter', e => { if ([...e.dataTransfer.types].some(t => t.startsWith('text') || t === 'Files')) { depth++; document.body.classList.add('dragging'); } });
   document.addEventListener('dragleave', () => { if (--depth <= 0) { depth = 0; document.body.classList.remove('dragging'); } });
   document.addEventListener('dragover', e => e.preventDefault());
   document.addEventListener('drop', e => {
     e.preventDefault(); depth = 0; document.body.classList.remove('dragging');
+    // files: the app gets their real paths through WebView2 and answers with 'files.dropped'
+    if (e.dataTransfer.files.length) {
+      if (window.chrome?.webview?.postMessageWithAdditionalObjects) chrome.webview.postMessageWithAdditionalObjects('st-files', e.dataTransfer.files);
+      return;
+    }
     const text = (e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain') || '').split('\n')[0].trim(); if (!text) return;
     if ($('#page-live').classList.contains('on')) { $('#liveInput').value = text; return; }
     showPage('clip'); srcMode.set('theirs'); $$('#sourceCard .mode-pane').forEach(p => p.classList.toggle('on', p.dataset.mode === 'theirs'));

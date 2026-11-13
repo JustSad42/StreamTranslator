@@ -93,11 +93,32 @@ pub fn download_section(info: &VodInfo, quality: &str, start: f64, end: f64, out
     args.extend(inputs);
     args.extend(["-t".into(), format!("{dur:.3}")]);
     args.extend(maps.iter().map(|s| s.to_string()));
-    args.extend(["-c", "copy", "-avoid_negative_ts", "make_zero", "-movflags", "+faststart"].iter().map(|s| s.to_string()));
-    args.push(out.to_string_lossy().into_owned());
-    run_ffmpeg(&args, dur, progress, cancel, None)?;
+    let local = crate::local::is_local(info);
+    // a local file's sound can be anything (PCM, Vorbis, AC-3...), so it's converted to AAC for the .mp4/.m4a
+    let codecs: &[&str] = if local { &["-c:v", "copy", "-c:a", "aac", "-b:a", "192k"] } else { &["-c", "copy"] };
+    let tail = |codecs: &[&str]| -> Vec<String> {
+        let mut a: Vec<String> = codecs.iter().map(|s| s.to_string()).collect();
+        a.extend(["-avoid_negative_ts", "make_zero", "-movflags", "+faststart"].iter().map(|s| s.to_string()));
+        a.push(out.to_string_lossy().into_owned());
+        a
+    };
+    let copy = [args.clone(), tail(codecs)].concat();
+    match run_ffmpeg(&copy, dur, progress, cancel, None) {
+        // a picture format .mp4 can't hold (ProRes, some AVI codecs...): re-encode it instead
+        Err(e) if local && !audio_only && e.downcast_ref::<Cancelled>().is_none() => {
+            let _ = std::fs::remove_file(out);
+            let enc = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k"];
+            run_ffmpeg(&[args, tail(&enc)].concat(), dur, progress, cancel, None).map_err(|e2| anyhow::anyhow!("{e2}
+(copying first: {e})"))?;
+        }
+        r => r?,
+    }
     if std::fs::metadata(out).map(|m| m.len()).unwrap_or(0) < 10_000 {
-        return job_err("The download came back empty. The VOD may be muted, deleted, or sub-only.");
+        return job_err(if crate::local::is_local(info) {
+            "Cutting the section out of the video file came back empty. Is that part of the file readable?"
+        } else {
+            "The download came back empty. The VOD may be muted, deleted, or sub-only."
+        });
     }
     Ok(())
 }
@@ -145,7 +166,7 @@ pub fn decode_audio(path: &Path) -> Result<Vec<f32>> {
     Ok(audio)
 }
 
-fn grab(info: &VodInfo, stream: &str, t: f64, vf: &str, codec: &str, timeout_s: u64) -> Result<Vec<u8>> {
+pub(crate) fn grab(info: &VodInfo, stream: &str, t: f64, vf: &str, codec: &str, timeout_s: u64) -> Result<Vec<u8>> {
     let exe = ffmpeg_exe()?;
     let mut cmd = command(&exe);
     cmd.args(["-hide_banner", "-nostdin", "-loglevel", "error"])
@@ -187,6 +208,8 @@ fn grab(info: &VodInfo, stream: &str, t: f64, vf: &str, codec: &str, timeout_s: 
 
 /// One JPEG frame from the VOD (preview thumbnails, thumb.jpg).
 pub fn grab_frame(info: &VodInfo, seconds: f64, width: u32) -> Result<Vec<u8>> {
+    // the last frame starts a little before the end: asking for the very end returns nothing
+    let seconds = if info.duration > 2.0 { seconds.min(info.duration - 1.0) } else { seconds };
     grab(info, &info.preview_stream, seconds, &format!("scale={width}:-2"), "mjpeg", 30)
 }
 

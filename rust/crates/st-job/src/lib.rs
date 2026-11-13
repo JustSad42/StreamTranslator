@@ -246,7 +246,11 @@ pub fn run_job(p: &JobParams, cb: &Callbacks, engines: &Engines) -> Result<JobRe
     }
     let mut two_step = p.method == "two-step";
     let need_video = p.burn;
-    let mut stages: Vec<&str> = vec!["Reading VOD info", "Downloading audio", "Loading Whisper"];
+    // a video file on this PC: same steps, but the sections are cut from the file instead of downloaded
+    let local = st_core::vod::local_video(&p.url).is_some();
+    let (s_info, s_audio, s_video) =
+        if local { ("Reading the video file", "Cutting out the audio", "Cutting out the video") } else { ("Reading VOD info", "Downloading audio", "Downloading video") };
+    let mut stages: Vec<&str> = vec![s_info, s_audio, "Loading Whisper"];
     if p.isolate {
         stages.push("Isolating voices");
     }
@@ -263,7 +267,7 @@ pub fn run_job(p: &JobParams, cb: &Callbacks, engines: &Engines) -> Result<JobRe
         stages.push("Telling speakers apart");
     }
     if need_video {
-        stages.extend(["Downloading video", "Burning subtitles into video"]);
+        stages.extend([s_video, "Burning subtitles into video"]);
     }
     let n = stages.len();
     let step = Mutex::new(0usize);
@@ -298,7 +302,7 @@ pub fn run_job(p: &JobParams, cb: &Callbacks, engines: &Engines) -> Result<JobRe
     let have_video = if need_video { cached(&folder, "video", Some(&p.quality)) } else { None };
     let mut video_thread = None;
     if need_video && have_video.is_some() {
-        log(&format!("Reusing the {} video downloaded earlier.", p.quality));
+        log(&if local { "Reusing the video cut earlier.".to_string() } else { format!("Reusing the {} video downloaded earlier.", p.quality) });
     } else if need_video {
         let (info, folder, video_file, quality) = (info.clone(), folder.clone(), video_file.clone(), p.quality.clone());
         let c = cancel.either(&stop_video);
@@ -336,12 +340,12 @@ pub fn run_job(p: &JobParams, cb: &Callbacks, engines: &Engines) -> Result<JobRe
     }
 
     let body = (|| -> Result<JobResult> {
-        stage("Downloading audio");
+        stage(s_audio);
         if cached(&folder, "audio", None).is_some() {
-            log("Reusing the audio downloaded earlier.");
+            log(if local { "Reusing the audio cut earlier." } else { "Reusing the audio downloaded earlier." });
         } else {
-            let bg = if video_thread.is_some() { format!(", the {} video in the background.", p.quality) } else { ".".into() };
-            log(&format!("Downloading {} - {} ({}): sound first{bg}", format_ts(start), format_ts(end), format_ts(dur)));
+            let bg = if video_thread.is_some() && local { ", the video in the background.".to_string() } else if video_thread.is_some() { format!(", the {} video in the background.", p.quality) } else { ".".into() };
+            log(&format!("{} {} - {} ({}): sound first{bg}", if local { "Cutting" } else { "Downloading" }, format_ts(start), format_ts(end), format_ts(dur)));
             ffmpeg::download_section(&info, &p.quality, start, end, &audio_file, &*cb.progress, cancel, true)?;
             remember_download(&folder, "audio", &audio_file, None)?;
         }
@@ -542,10 +546,10 @@ pub fn run_job(p: &JobParams, cb: &Callbacks, engines: &Engines) -> Result<JobRe
         // Find how much earlier by matching its sound against the audio we transcribed.
         let mut shift = 0.0;
         if need_video {
-            stage("Downloading video");
+            stage(s_video);
             if let Some(h) = video_thread.take() {
                 if !h.is_finished() {
-                    log("Waiting for the video download to finish…");
+                    log(if local { "Waiting for the video to finish cutting…" } else { "Waiting for the video download to finish…" });
                 }
                 while !h.is_finished() {
                     (cb.progress)(*vprog.lock().unwrap());

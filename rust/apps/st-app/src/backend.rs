@@ -252,6 +252,7 @@ impl Backend {
             "settings.save" => Value::Object(self.settings.lock().unwrap().save(&p["data"])?.clone()),
             "source.load" => self.source_load(&s(p, "text"))?,
             "vod.frame" => self.vod_frame(&s(p, "id"), f(p, "t"), p["w"].as_u64().unwrap_or(480) as u32)?,
+            "vod.storyboard" => self.vod_storyboard(&s(p, "id"))?,
             "sync.match" => self.sync_match(p)?,
             "snap.run" => self.snap_run(&s(p, "id"), f(p, "lo"), f(p, "hi"))?,
             "snap.cancel" => {
@@ -333,6 +334,13 @@ impl Backend {
                 shell_open(&s(p, "url"));
                 json!(true)
             }
+            "os.pick_video" => rfd::FileDialog::new()
+                .set_title("Pick a video to translate")
+                .add_filter("Videos", &["mp4", "mkv", "mov", "webm", "avi", "flv", "ts", "m4v", "wmv", "mpg", "mpeg", "3gp"])
+                .add_filter("All files", &["*"])
+                .pick_file()
+                .map(|p| Value::from(path_str(&p)))
+                .unwrap_or(Value::Null),
             "os.browse" => {
                 let cur = s(p, "current");
                 let mut d = rfd::FileDialog::new().set_title("Save translated clips to");
@@ -599,8 +607,26 @@ impl Backend {
         if kind == Kind::Channel {
             return Ok(json!({"kind": "channel", "login": value, "vods": ytdlp::list_vods(&value, 12)?}));
         }
-        let info = self.remember(ytdlp::fetch_info(&value)?);
+        let mut info = ytdlp::fetch_info(&value)?;
+        if info.storyboard.is_none() {
+            // a local file's timeline thumbnails, made earlier this session
+            info.storyboard = self.vods.lock().unwrap().get(&info.id).and_then(|v| v.storyboard.clone());
+        }
+        let info = self.remember(info);
         Ok(json!({"kind": "vod", "vod": info.to_dict()}))
+    }
+
+    /// Timeline thumbnails for a local video file (Twitch VODs come with their own).
+    fn vod_storyboard(&self, id: &str) -> Result<Value> {
+        let info = self.vod(id)?;
+        if let Some(sb) = info.storyboard {
+            return Ok(sb);
+        }
+        let sb = st_media::local::storyboard(&info)?;
+        if let Some(v) = self.vods.lock().unwrap().get_mut(id) {
+            v.storyboard = Some(sb.clone());
+        }
+        Ok(sb)
     }
 
     fn vod_frame(&self, id: &str, t: f64, w: u32) -> Result<Value> {

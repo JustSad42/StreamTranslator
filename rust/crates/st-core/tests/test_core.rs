@@ -327,3 +327,33 @@ fn test_chat_line_parsing() {
     assert_eq!((en.user.as_str(), en.text.as_str(), en.core, en.id.as_str()), ("bob", "lol that was so good bro", None, "2.5"));
     assert!(parse_line("PING :tmi.twitch.tv", 0.0).is_none());
 }
+
+#[test]
+fn local_video_paths() {
+    use st_core::{
+        sync::{classify, Kind},
+        vod::{local_id, local_video, looks_like_path},
+    };
+    let dir = std::env::temp_dir().join("st test clips");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("Partida épica.mkv");
+    std::fs::write(&file, b"x").unwrap();
+    let f = file.to_string_lossy().to_string();
+    // plain, quoted (Explorer's "Copy as path") and file:/// forms all find the file
+    assert_eq!(local_video(&f).as_deref(), Some(file.as_path()));
+    assert_eq!(local_video(&format!("  \"{f}\" ")).as_deref(), Some(file.as_path()));
+    let url = format!("file:///{}", f.replace('\\', "/").replace(' ', "%20"));
+    assert_eq!(local_video(&url).as_deref(), Some(file.as_path()));
+    assert!(matches!(classify(&f), Ok((Kind::Vod, p)) if p == f));
+    // missing files are paths, but not videos; links and channel names are neither
+    assert!(local_video(r"C:\nope\gone.mp4").is_none() && looks_like_path(r"C:\nope\gone.mp4"));
+    assert!(classify(r"C:\nope\gone.mp4").unwrap_err().0.contains("Couldn't find that file"));
+    assert!(!looks_like_path("https://www.twitch.tv/videos/1") && !looks_like_path("ibai"));
+    // the id is stable and changes with the file
+    let a = local_id(&file);
+    assert_eq!(a, local_id(&file));
+    assert!(a.starts_with("Partida_"));
+    std::fs::write(&file, b"longer now").unwrap();
+    assert_ne!(a, local_id(&file));
+    std::fs::remove_dir_all(&dir).unwrap();
+}

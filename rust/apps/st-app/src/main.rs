@@ -143,6 +143,7 @@ fn main() {
                 let _ = w.set_min_size(Some(tauri::LogicalSize::new(900.0 * z, 620.0 * z)));
             }
             be.apply_scale();
+            watch_file_drops(&w, be.clone());
             w.show()?;
 
             let open = MenuItem::with_id(app, "open", "Open StreamTranslator", true, None::<&str>)?;
@@ -187,4 +188,38 @@ fn main() {
         }),
         Err(e) => st_appkit::logs::error(&format!("The window failed to open: {e}")),
     }
+}
+
+/// Video files dropped on the window. The page posts them with `chrome.webview.postMessageWithAdditionalObjects`,
+/// which hands the real paths to the app (an HTML drop only tells the page the file names).
+fn watch_file_drops(w: &tauri::WebviewWindow, be: Arc<backend::Backend>) {
+    let _ = w.with_webview(move |wv| unsafe {
+        use webview2_com::{take_pwstr, Microsoft::Web::WebView2::Win32::*, WebMessageReceivedEventHandler};
+        use windows::core::{Interface, PWSTR};
+        let Ok(core) = wv.controller().CoreWebView2() else { return };
+        let handler = WebMessageReceivedEventHandler::create(Box::new(move |_, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut m = PWSTR::null();
+            if args.TryGetWebMessageAsString(&mut m).is_err() || take_pwstr(m) != "st-files" {
+                return Ok(()); // the app's own requests (handled by Tauri)
+            }
+            let Ok(args) = args.cast::<ICoreWebView2WebMessageReceivedEventArgs2>() else { return Ok(()) };
+            let objects = args.AdditionalObjects()?;
+            let mut n = 0u32;
+            objects.Count(&mut n)?;
+            let mut paths = vec![];
+            for i in 0..n {
+                if let Ok(f) = objects.GetValueAtIndex(i).and_then(|o| o.cast::<ICoreWebView2File>()) {
+                    let mut p = PWSTR::null();
+                    if f.Path(&mut p).is_ok() {
+                        paths.push(take_pwstr(p));
+                    }
+                }
+            }
+            be.emit("files.dropped", serde_json::json!({ "paths": paths }));
+            Ok(())
+        }));
+        let mut token = 0i64;
+        let _ = core.add_WebMessageReceived(&handler, &mut token);
+    });
 }

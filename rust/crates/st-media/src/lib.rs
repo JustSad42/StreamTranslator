@@ -3,6 +3,7 @@
 
 pub mod ffmpeg;
 pub mod hub;
+pub mod local;
 pub mod tools;
 pub mod ytdlp;
 

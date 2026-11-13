@@ -25,4 +25,5 @@ tauri-plugin-notification = "2"
 rfd = "0.15"
 arboard = { version = "3", default-features = false }
 base64 = "0.22"
+webview2-com = "0.39"
 windows = { workspace = true, features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_Security"] }

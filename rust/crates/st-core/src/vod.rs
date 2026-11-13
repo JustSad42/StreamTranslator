@@ -136,3 +136,40 @@ pub fn safe_name(name: &str) -> String {
         s
     }
 }
+
+// ---------------------------------------------------------------- local video files
+
+/// A video file on this PC, from a pasted/dropped path ("C:\clips\x.mp4", with or without quotes, or a
+/// file:/// link). Only paths that exist; see `looks_like_path` for the error case.
+pub fn local_video(text: &str) -> Option<std::path::PathBuf> {
+    let p = std::path::PathBuf::from(local_text(text));
+    (p.is_absolute() && p.is_file()).then_some(p)
+}
+
+/// Text that is meant as a file path (drive letter, network share or file:// link), existing or not.
+pub fn looks_like_path(text: &str) -> bool {
+    let t = local_text(text);
+    let b = t.as_bytes();
+    (b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')) || t.starts_with("\\\\")
+}
+
+fn local_text(text: &str) -> String {
+    let t = text.trim().trim_matches('"').trim();
+    match t.strip_prefix("file:///") {
+        Some(rest) => unquote_plus(&rest.replace('+', "%2B")).replace('/', "\\"),
+        None => t.to_string(),
+    }
+}
+
+/// A short id for a local file that changes when the file does (path, size and modified time), so
+/// re-running a section reuses its cut audio/video only while the file is the same.
+pub fn local_id(path: &std::path::Path) -> String {
+    let meta = std::fs::metadata(path).ok();
+    let mtime = meta.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+    let key = format!("{}|{}|{mtime}", path.to_string_lossy().to_lowercase(), meta.map(|m| m.len()).unwrap_or(0));
+    // FNV-1a: stable across Rust versions, unlike DefaultHasher
+    let h = key.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let stem: String = safe_name(&stem).chars().take(28).collect();
+    format!("{stem}_{:06x}", h & 0xff_ffff)
+}

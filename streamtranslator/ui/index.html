@@ -41,7 +41,8 @@
         <div class="mode-pane on" data-mode="theirs">
           <div class="bigfield" id="theirField">
             <i class="ic ic-link"></i>
-            <input id="theirInput" placeholder="Paste a VOD link (Twitch, YouTube, Kick) — or type a Twitch channel name (e.g. ibai)" spellcheck="false" autocomplete="off">
+            <input id="theirInput" placeholder="Paste a VOD link (Twitch, YouTube, Kick), type a Twitch channel name, or drop a video file" spellcheck="false" autocomplete="off">
+            <button class="btn ghost" id="theirFile" title="Translate a video file from this PC"><i class="ic ic-folder"></i>Video file</button>
             <button class="btn primary" id="theirLoad">Load</button>
           </div>
           <div class="clip-hint" id="clipHint" hidden></div>
@@ -435,7 +436,7 @@
 </div>
 
 <div class="toasts" id="toasts"></div>
-<div class="drop-hint" id="dropHint"><div>Drop the link</div></div>
+<div class="drop-hint" id="dropHint"><div>Drop the link or video</div></div>
 <script src="app.js"></script>
 </body>
 </html>
