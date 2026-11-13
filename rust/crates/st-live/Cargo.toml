@@ -1,0 +1,16 @@
+[package]
+name = "st-live"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+st-core.workspace = true
+st-media.workspace = true
+st-ml.workspace = true
+st-job.workspace = true
+st-appkit.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+base64 = "0.22"
+native-tls = "0.2"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

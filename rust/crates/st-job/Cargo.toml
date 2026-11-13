@@ -1,0 +1,14 @@
+[package]
+name = "st-job"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+st-core.workspace = true
+st-media.workspace = true
+st-ml.workspace = true
+st-vision.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

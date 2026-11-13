@@ -1,0 +1,15 @@
+[package]
+name = "st-vision"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+st-core.workspace = true
+st-media.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+image.workspace = true
+rustfft.workspace = true
+rayon.workspace = true
+ureq.workspace = true
+windows.workspace = true

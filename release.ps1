@@ -2,33 +2,42 @@
 # tags, pushes to GitHub and creates a GitHub release with the installer attached.
 # Installed copies see the release at their next start and offer "Update now".
 #
-#   powershell -ExecutionPolicy Bypass -File release.ps1 -Version 2.2.1 -Notes "Fixed the chat translator"
-#   (-Notes can also be a path to a text/markdown file)
+# From 3.0.0 on this builds the Rust app in rust\ (rust\build-installer.ps1). The Python app in
+# streamtranslator\ is no longer released; its build.ps1 still works for the 2.x line.
+#
+#   powershell -ExecutionPolicy Bypass -File release.ps1 -Version 3.0.1 -Notes "Fixed the chat translator"
+#   (-Notes can also be a path to a text/markdown file, e.g. release-notes\3.0.1.md)
 param(
     [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][string]$Notes
 )
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
-$py = ".\.venv\Scripts\python.exe"
 
-if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must look like 2.2.1" }
+if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must look like 3.0.1" }
 $tag = "v$Version"
 if (git tag --list $tag) { throw "$tag already exists. Pick a higher version." }
 gh auth status *> $null
 if ($LASTEXITCODE -ne 0) { throw "Not logged in to GitHub. Run: gh auth login" }
 
 Write-Host "Version $Version..." -ForegroundColor Cyan
-$init = "streamtranslator\__init__.py"
-(Get-Content $init -Raw) -replace '__version__ = "[^"]+"', "__version__ = `"$Version`"" | Set-Content $init -NoNewline
+# the first version = line in rust\Cargo.toml is [workspace.package], which every crate uses
+$toml = "rust\Cargo.toml"
+$re = [regex]'(?m)^version = "[^"]+"'
+$re.Replace((Get-Content $toml -Raw), "version = `"$Version`"", 1) | Set-Content $toml -NoNewline
 
 Write-Host "Tests..." -ForegroundColor Cyan
-& $py -m pytest -q
-if ($LASTEXITCODE -ne 0) { throw "Tests failed. Nothing was published." }
+$env:CARGO_TARGET_DIR = Join-Path $PSScriptRoot "rust\target-dist"
+Push-Location rust
+cargo test -q -p st-core -p st-appkit
+$ok = $LASTEXITCODE -eq 0
+Pop-Location
+Remove-Item Env:CARGO_TARGET_DIR
+if (-not $ok) { throw "Tests failed. Nothing was published." }
 
-& powershell -ExecutionPolicy Bypass -File build.ps1
+& powershell -ExecutionPolicy Bypass -File rust\build-installer.ps1
 if ($LASTEXITCODE -ne 0) { throw "Build failed. Nothing was published." }
-$setup = "dist\StreamTranslator-Setup-$Version.exe"
+$setup = "rust\dist\StreamTranslator-Setup-$Version.exe"
 if (-not (Test-Path $setup)) { throw "$setup wasn't built." }
 
 Write-Host "Commit, tag and push..." -ForegroundColor Cyan

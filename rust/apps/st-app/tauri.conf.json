@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "StreamTranslator",
+  "version": "3.0.0",
+  "identifier": "com.justsad42.streamtranslator",
+  "build": { "frontendDist": "../../../streamtranslator/ui" },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": null,
+      "assetProtocol": { "enable": true, "scope": ["**"] }
+    }
+  },
+  "bundle": { "active": false, "icon": ["../../../assets/icon.ico"] }
+}

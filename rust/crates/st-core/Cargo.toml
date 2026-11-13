@@ -1,0 +1,12 @@
+[package]
+name = "st-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+fancy-regex.workspace = true
+regex.workspace = true
+realfft.workspace = true

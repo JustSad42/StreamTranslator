@@ -1,0 +1,18 @@
+[package]
+name = "st-ml"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+st-core.workspace = true
+st-media.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+realfft.workspace = true
+ct2rs-sys.workspace = true
+sentencepiece.workspace = true
+tokenizers.workspace = true
+ort.workspace = true
+flate2.workspace = true
+ureq.workspace = true
+windows.workspace = true
