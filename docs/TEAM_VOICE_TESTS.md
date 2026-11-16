@@ -41,10 +41,21 @@ A test bot is built (`discord-voice-spike.exe`, songbird 0.6.1 + serenity 0.12.5
 each person as a separate WAV named after them for a set time, and reports how much clean audio arrived per person.
 It needs no privileged intents (only Guilds and Voice States) and no message permissions.
 
-**Status: built, not yet run.** It needs a bot token and a server where the bot can be added. Results go here.
+**Result (2026-11-16, a real team call, 60 s): it works.** The bot joined the encrypted call and recorded 5 people
+as separate streams named after their Discord accounts (3 talking, 2 quiet). The audio is clean speech, and
+Whisper large-v3 translated the Egyptian Arabic well. Names Whisper had never heard came out mangled ("BrokeVein"),
+which is why Discord mode now gives Whisper everyone's name in the call as a hint.
+
+## 3. Discord mode in the app (the recorded call replayed as five people)
+
+- Everyone listed by their Discord name; every line named after the right person (no voice learning needed).
+- Delay after each sentence: about 0.5 s on average, 1.0 s at worst, with three people talking at once.
+- Before capping Whisper's retries, one unclear piece took 9.7 s and held up everyone's captions; now at most one
+  retry and a length cap, so a loop can't run long. Repeated phrases ("X, but X") are trimmed to one.
+- Renaming someone updates the caption window and OBS at once; it's saved, and can be undone.
 
 ## Decision so far
 
 - Speech: large-v3, Whisper translation, per speaker, glossary on top.
 - Audio-device mode: no blockers.
-- Discord mode: pending the bot test.
+- Discord mode: works, and is the better choice when the bot can join the server (each person separate, real names).

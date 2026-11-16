@@ -2,6 +2,7 @@
 //! detection, app updates from GitHub, the setup screen's components, yt-dlp updates, champion list.
 //! No GPU and no window code, so all of it is testable with plain `cargo test`.
 
+#![recursion_limit = "256"]
 pub mod appupdate;
 pub mod champions;
 pub mod components;

@@ -58,7 +58,7 @@ function render() {
   box.querySelectorAll('.t,.o').forEach(e => e.remove());
   box.classList.toggle('on', !!cap.text);
   if (cap.lines) {
-    cap.lines.forEach(l => { const d = document.createElement('div'); d.className = 't team'; const n = document.createElement('span'); n.className = 'who';
+    cap.lines.slice(-3).forEach(l => { const d = document.createElement('div'); d.className = 't team'; const n = document.createElement('span'); n.className = 'who';
       n.style.color = l.color; n.textContent = l.name + ': '; d.append(n, l.text); box.appendChild(d); });
     return;
   }
@@ -220,7 +220,21 @@ impl Backend {
             champions: p["champions"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
             save_dir: save_dir.into(),
             voices: team::load_voices(),
+            discord: None,
         };
+        let mut opts = opts;
+        if s(p, "source") == "discord" {
+            let st = self.settings.lock().unwrap();
+            let id = |k: &str| st.str(k).trim().parse::<u64>().ok();
+            let token = st.str("discord_token").trim().to_string();
+            match (token.is_empty(), id("discord_guild"), id("discord_channel")) {
+                (false, Some(guild), Some(channel)) => opts.discord = Some(st_live::discord::DiscordTarget { token, guild, channel }),
+                (true, ..) => return Err(st_core::JobError("Paste your Discord bot token first.".into()).into()),
+                _ => return Err(st_core::JobError("Pick the Discord voice channel first.".into()).into()),
+            }
+            opts.team_device = None;
+            opts.mic_device = None;
+        }
         let slot: Arc<Mutex<Weak<TeamSession>>> = Arc::new(Mutex::new(Weak::new()));
         let (app, sl) = (self.app.clone(), slot.clone());
         let emit: Emit = Arc::new(move |kind: &str, data: Value| {
@@ -257,7 +271,7 @@ impl Backend {
             let lines = {
                 let mut r = self.team_recent.lock().unwrap();
                 r.push(json!({"id": data["id"], "name": data["name"], "color": data["color"], "text": data["text"]}));
-                let extra = r.len().saturating_sub(3);
+                let extra = r.len().saturating_sub(6);
                 r.drain(..extra);
                 r.clone()
             };
@@ -355,6 +369,12 @@ impl Backend {
         if let Some(t) = self.team.lock().unwrap().as_ref() {
             t.set_voices(voices.clone());
         }
+        self.relabel_recent(name, to);
+        Ok(team::voices_view(&voices))
+    }
+
+    /// The lines still on screen (caption window and OBS) under a new name.
+    fn relabel_recent(&self, name: &str, to: &str) {
         let lines = {
             let mut r = self.team_recent.lock().unwrap();
             for l in r.iter_mut().filter(|l| l["name"] == name) {
@@ -371,7 +391,36 @@ impl Backend {
                 obs.send(&c);
             }
         }
-        Ok(team::voices_view(&voices))
+    }
+
+    /// Rename someone heard through Discord (an empty name goes back to their Discord name).
+    pub(super) fn team_rename_person(&self, id: &str, to: &str) -> Result<Value> {
+        let to = to.trim();
+        let mut people = team::load_people();
+        let Some(i) = people.iter().position(|x| x.id == id) else {
+            return Err(st_core::JobError("That person isn't known yet.".into()).into());
+        };
+        let old = people[i].shown().to_string();
+        let new = if to.is_empty() { people[i].discord.clone() } else { to.to_string() };
+        if people.iter().enumerate().any(|(j, x)| j != i && x.shown().eq_ignore_ascii_case(&new)) {
+            return Err(st_core::JobError(format!("Someone else is already called {new}.")).into());
+        }
+        people[i].name = (new != people[i].discord).then(|| new.clone());
+        team::save_people(&people)?;
+        if let Some(t) = self.team.lock().unwrap().as_ref() {
+            t.set_people(people.clone());
+        }
+        self.relabel_recent(&old, &new);
+        Ok(team::person_view(&people[i]))
+    }
+
+    /// The caption look in OBS: saved, and sent to open browser sources at once.
+    pub(super) fn obs_style(&self, style: &Value) -> Result<Value> {
+        self.settings.lock().unwrap().save(&json!({"obs_style": style}))?;
+        if let Some(obs) = self.obs.lock().unwrap().as_ref() {
+            obs.set_style(style);
+        }
+        Ok(json!(true))
     }
 
     pub(super) fn team_forget(&self, name: &str) -> Result<Value> {
@@ -422,7 +471,9 @@ impl Backend {
     pub(super) fn obs_url(&self) -> Result<Value> {
         let mut g = self.obs.lock().unwrap();
         if g.is_none() {
-            *g = Some(ObsServer::start(47851)?);
+            let server = ObsServer::start(47851)?;
+            server.set_style(&self.settings.lock().unwrap().values.get("obs_style").cloned().unwrap_or(json!({})));
+            *g = Some(server);
         }
         Ok(json!(g.as_ref().unwrap().url()))
     }

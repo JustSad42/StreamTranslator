@@ -11,40 +11,71 @@ use std::{
 use anyhow::Result;
 use serde_json::Value;
 
-/// The page, unchanged from the Python app.
+/// The page. Its look comes from the app (a {"style": ...} event), so changes show at once in OBS;
+/// ?demo shows sample lines (the preview in the app).
 pub const OBS_PAGE: &str = r#"<!doctype html><html><head><meta charset="utf-8"><title>StreamTranslator captions</title>
 <style>
-html,body{margin:0;background:transparent;overflow:hidden;font-family:'Segoe UI',system-ui,sans-serif}
-#wrap{position:fixed;left:0;right:0;bottom:var(--bottom,6%);display:flex;flex-direction:column;align-items:center;gap:8px;padding:0 4%}
-.cap{max-width:100%;text-align:center;color:#fff;font-weight:700;font-size:var(--size,44px);line-height:1.2;
- padding:.25em .6em;border-radius:.35em;background:rgba(8,8,12,var(--bg,.55));
- text-shadow:0 0 4px #000,0 0 2px #000,0 2px 3px #000;animation:in .35s cubic-bezier(.2,.8,.2,1);transition:opacity .6s}
-.orig{font-size:calc(var(--size,44px)*.55);font-weight:500;color:#d8d8e4;background:rgba(8,8,12,calc(var(--bg,.55)*.8))}
+:root{--size:42px;--bg:.6;--pos:7%;--width:80%;--font:'Segoe UI',system-ui,sans-serif;--stroke:.09em;--lh:1.25}
+html,body{margin:0;background:transparent;overflow:hidden}
+#wrap{position:fixed;left:0;right:0;bottom:var(--pos);display:flex;flex-direction:column;align-items:center;gap:calc(var(--size)*.22);padding:0 3%;font-family:var(--font)}
+body.top #wrap{bottom:auto;top:var(--pos);flex-direction:column}
+body.left #wrap{align-items:flex-start}
+.cap{max-width:var(--width);box-sizing:border-box;text-align:center;color:#fff;font-weight:700;font-size:var(--size);line-height:var(--lh);
+ padding:.22em .62em .26em;border-radius:.38em;background:rgba(10,10,16,var(--bg));
+ -webkit-text-stroke:var(--stroke) rgba(0,0,0,.85);paint-order:stroke fill;
+ text-shadow:0 .04em .12em rgba(0,0,0,.9),0 0 .3em rgba(0,0,0,.45);
+ animation:in .38s cubic-bezier(.2,.8,.2,1) both;transition:opacity .7s ease,transform .7s ease;overflow-wrap:anywhere}
+body.left .cap{text-align:left}
+body.nostroke .cap{-webkit-text-stroke:0}
+body.box .cap{backdrop-filter:blur(6px)}
+.orig{font-size:calc(var(--size)*.56);font-weight:500;color:#dcdce8;background:rgba(10,10,16,calc(var(--bg)*.8))}
 .partial{opacity:.65}
-.who{font-weight:800}
-.team{font-size:calc(var(--size,44px)*.8)}
-.gone{opacity:0}
-@keyframes in{from{opacity:0;transform:translateY(12px) scale(.98)}to{opacity:1;transform:none}}
+.team{font-size:var(--size)}
+.who{font-weight:800;margin-right:.18em}
+body.names-white .who{color:#fff!important}
+body.names-off .who{display:none}
+body.names-above .cap.team{display:flex;flex-direction:column;align-items:center;gap:.06em}
+body.names-above.left .cap.team{align-items:flex-start}
+body.names-above .who{font-size:.68em;letter-spacing:.04em;text-transform:uppercase;margin:0;-webkit-text-stroke:calc(var(--stroke)*.8) rgba(0,0,0,.85)}
+.old{opacity:.72}
+.gone{opacity:0;transform:translateY(6px)}
+@keyframes in{from{opacity:0;transform:translateY(14px) scale(.97)}to{opacity:1;transform:none}}
 </style></head><body><div id="wrap"></div>
 <script>
-const q=new URLSearchParams(location.search), root=document.documentElement;
-if(q.get('size'))root.style.setProperty('--size',q.get('size')+'px');
-if(q.get('bg'))root.style.setProperty('--bg',q.get('bg'));
-if(q.get('bottom'))root.style.setProperty('--bottom',q.get('bottom')+'%');
-const showOrig=q.get('orig')!=='0', wrap=document.getElementById('wrap'); let timer;
-function render(m){
-  wrap.innerHTML='';
-  if(m.lines){
-    // team voice: the last few lines, each with its speaker's name in their colour
-    m.lines.forEach(l=>{const d=document.createElement('div');d.className='cap team';const n=document.createElement('span');n.className='who';n.style.color=l.color;n.textContent=l.name+': ';d.appendChild(n);d.appendChild(document.createTextNode(l.text));wrap.appendChild(d)});
-    clearTimeout(timer);timer=setTimeout(()=>wrap.querySelectorAll('.cap').forEach(c=>c.classList.add('gone')),12000);
-    return;
-  }
-  if(m.text){const d=document.createElement('div');d.className='cap'+(m.partial?' partial':'');d.textContent=m.text;wrap.appendChild(d)}
-  if(showOrig&&m.orig){const o=document.createElement('div');o.className='cap orig';o.textContent=m.orig;wrap.appendChild(o)}
-  clearTimeout(timer);timer=setTimeout(()=>wrap.querySelectorAll('.cap').forEach(c=>c.classList.add('gone')),10000);
+const q=new URLSearchParams(location.search), root=document.documentElement, wrap=document.getElementById('wrap');
+const S={size:42,bg:.6,pos:7,place:'bottom',align:'center',lines:3,hide:12,names:'color',stroke:true,width:80,font:'Segoe UI',orig:true,fade:true};
+// old links: ?size=56&bg=0.4&bottom=10&orig=0
+if(q.get('size'))S.size=+q.get('size'); if(q.get('bg'))S.bg=+q.get('bg'); if(q.get('bottom'))S.pos=+q.get('bottom'); if(q.get('orig')==='0')S.orig=false;
+let last=null, timer;
+const DEMO={lines:[{name:'Ahmed',color:'#ffd166',text:'Flash is down on their ADC, go now!'},{name:'Omar',color:'#ff7aa8',text:'I have ultimate, I can engage on the jungler.'},{name:'Revenger',color:'#7cc4ff',text:"Wait for me, I'm coming from top side."}]};
+function applyStyle(){
+  root.style.setProperty('--size',S.size+'px'); root.style.setProperty('--bg',S.bg); root.style.setProperty('--pos',S.pos+'%');
+  root.style.setProperty('--width',S.width+'%'); root.style.setProperty('--font',`'${S.font}','Segoe UI',system-ui,sans-serif`);
+  document.body.className=[S.place==='top'?'top':'',S.align==='left'?'left':'',S.stroke?'':'nostroke','names-'+S.names].join(' ');
 }
-function connect(){const es=new EventSource('/events');es.onmessage=e=>render(JSON.parse(e.data));es.onerror=()=>{es.close();setTimeout(connect,2000)}}
+function render(m){
+  wrap.innerHTML=''; clearTimeout(timer);
+  if(!m)return;
+  if(m.lines){
+    const lines=m.lines.slice(-Math.max(1,S.lines));
+    const list=S.place==='top'?lines.slice().reverse():lines;
+    list.forEach((l,i)=>{const d=document.createElement('div');d.className='cap team';
+      const newest=S.place==='top'?i===0:i===list.length-1; if(S.fade&&!newest&&list.length>1)d.classList.add('old');
+      const n=document.createElement('span');n.className='who';n.style.color=l.color;n.textContent=S.names==='above'?l.name:l.name+':';
+      const t=document.createElement('span');t.textContent=l.text;d.append(n,t);wrap.appendChild(d)});
+  }else{
+    if(m.text){const d=document.createElement('div');d.className='cap'+(m.partial?' partial':'');d.textContent=m.text;wrap.appendChild(d)}
+    if(S.orig&&m.orig){const o=document.createElement('div');o.className='cap orig';o.textContent=m.orig;wrap.appendChild(o)}
+  }
+  if(S.hide>0&&!q.has('demo'))timer=setTimeout(()=>wrap.querySelectorAll('.cap').forEach(c=>c.classList.add('gone')),S.hide*1000);
+}
+function onMsg(m){
+  if(m.style){Object.assign(S,m.style);applyStyle();render(q.has('demo')?DEMO:last);return}
+  last=m; if(!q.has('demo'))render(m);
+}
+applyStyle();
+if(q.has('demo'))render(DEMO);
+function connect(){const es=new EventSource('/events');es.onmessage=e=>onMsg(JSON.parse(e.data));es.onerror=()=>{es.close();setTimeout(connect,2000)}}
 connect();
 </script></body></html>"#;
 
@@ -52,6 +83,7 @@ connect();
 struct Shared {
     clients: Vec<mpsc::Sender<String>>,
     last: Option<String>,
+    style: Option<String>,
 }
 
 pub struct ObsServer {
@@ -88,6 +120,14 @@ impl ObsServer {
         format!("http://127.0.0.1:{}/", self.port)
     }
 
+    /// The caption style (size, position, names...) for every open browser source, now and later.
+    pub fn set_style(&self, style: &Value) {
+        let data = serde_json::json!({"style": style}).to_string();
+        let mut sh = self.shared.lock().unwrap();
+        sh.style = Some(data.clone());
+        sh.clients.retain(|c| c.send(data.clone()).is_ok());
+    }
+
     /// {text, orig, partial} to every open browser source.
     pub fn send(&self, msg: &Value) {
         let data = msg.to_string();
@@ -113,11 +153,14 @@ fn handle(mut conn: TcpStream, sh: &Mutex<Shared>) -> std::io::Result<()> {
     if path.starts_with("/events") {
         conn.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n")?;
         let (tx, rx) = mpsc::channel::<String>();
-        let last = {
+        let (style, last) = {
             let mut s = sh.lock().unwrap();
             s.clients.push(tx);
-            s.last.clone()
+            (s.style.clone(), s.last.clone())
         };
+        if let Some(st) = style {
+            conn.write_all(format!("data: {st}\n\n").as_bytes())?;
+        }
         if let Some(l) = last {
             conn.write_all(format!("data: {l}\n\n").as_bytes())?;
         }

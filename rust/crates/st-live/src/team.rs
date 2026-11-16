@@ -8,6 +8,7 @@
 //! (and other) players mix in, and handles dialect better than transcribing first (docs/TEAM_VOICE_TESTS.md).
 
 use std::{
+    collections::HashMap,
     io::Write,
     path::{Path, PathBuf},
     sync::{
@@ -28,7 +29,7 @@ use st_ml::{
     whisper::{Options, WhisperModel},
 };
 
-use crate::{devices, Emit};
+use crate::{devices, discord, Emit};
 
 const SR: usize = 16000;
 /// silence that ends a sentence
@@ -43,6 +44,8 @@ const LEARN_TIMEOUT_S: f64 = 45.0;
 pub const MATCH: f32 = 0.42;
 /// a sentence this short is too little to recognise the voice; it keeps the previous speaker
 const MIN_ID_S: f64 = 0.8;
+/// shorter than this isn't words
+const MIN_WORDS_S: f64 = 0.35;
 pub const UNKNOWN: &str = "Teammate";
 const UNKNOWN_COLOR: &str = "#b9b9c8";
 const ME_COLOR: &str = "#5eead4";
@@ -83,6 +86,45 @@ pub fn voices_view(v: &[Voice]) -> Value {
 /// The learned voice that best matches `emb`, if it's close enough.
 pub fn identify<'a>(voices: &'a [Voice], emb: &[f32]) -> Option<(&'a Voice, f32)> {
     voices.iter().map(|v| (v, speakers::similarity(&v.emb, emb))).filter(|(_, s)| *s >= MATCH).max_by(|a, b| a.1.total_cmp(&b.1))
+}
+
+/// Someone heard through the Discord bot (saved in team_discord.json, so colours and renames stick).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Person {
+    pub id: String,
+    /// their Discord display name, as last seen
+    pub discord: String,
+    /// your own name for them, if you renamed them
+    #[serde(default)]
+    pub name: Option<String>,
+    pub color: String,
+}
+
+impl Person {
+    pub fn shown(&self) -> &str {
+        self.name.as_deref().filter(|n| !n.is_empty()).unwrap_or(&self.discord)
+    }
+}
+
+fn people_path() -> PathBuf {
+    st_core::paths::data_dir().join("team_discord.json")
+}
+
+pub fn load_people() -> Vec<Person> {
+    std::fs::read(people_path()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+pub fn save_people(v: &[Person]) -> Result<()> {
+    let p = people_path();
+    std::fs::create_dir_all(p.parent().unwrap())?;
+    let tmp = p.with_extension("tmp");
+    std::fs::write(&tmp, serde_json::to_vec(v)?)?;
+    std::fs::rename(tmp, p)?;
+    Ok(())
+}
+
+pub fn person_view(p: &Person) -> Value {
+    json!({"id": p.id, "name": p.shown(), "discord": p.discord, "renamed": p.name.is_some(), "color": p.color})
 }
 
 // ---------------------------------------------------------------- sources
@@ -271,12 +313,16 @@ pub struct TeamOptions {
     pub champions: Vec<String>,
     pub save_dir: PathBuf,
     pub voices: Vec<Voice>,
+    /// hear the call through a Discord bot instead of the devices (each person separately, by name)
+    pub discord: Option<discord::DiscordTarget>,
 }
 
 /// One sentence waiting to be translated.
 struct Sentence {
     /// 0 = team device, 1 = your mic
     source: usize,
+    /// the Discord user who said it (Discord mode)
+    user: Option<u64>,
     audio: Vec<f32>,
     t0: f64,
     heard: Instant,
@@ -294,6 +340,9 @@ pub struct TeamSession {
     emit: Emit,
     /// the last named speaker on the team device and when, for sentences too short to recognise
     last_speaker: Mutex<Option<(String, String, Instant)>>,
+    /// Discord mode: everyone seen so far, and who is in this call
+    people: Mutex<Vec<Person>>,
+    in_call: Mutex<Vec<u64>>,
 }
 
 impl TeamSession {
@@ -309,6 +358,8 @@ impl TeamSession {
             glossary,
             emit,
             last_speaker: Mutex::new(None),
+            people: Mutex::new(load_people()),
+            in_call: Mutex::new(vec![]),
         })
     }
 
@@ -351,16 +402,96 @@ impl TeamSession {
         self.opts.lock().unwrap().voices = v;
     }
 
+    /// Discord people renamed while running.
+    pub fn set_people(&self, v: Vec<Person>) {
+        *self.people.lock().unwrap() = v;
+        self.emit_people();
+    }
+
+    /// team.people: who the bot has heard in this call.
+    fn emit_people(&self) {
+        let ids = self.in_call.lock().unwrap().clone();
+        let people = self.people.lock().unwrap();
+        let list: Vec<Value> = ids.iter().filter_map(|id| people.iter().find(|p| p.id == id.to_string())).map(person_view).collect();
+        self.emit("team.people", json!({"people": list}));
+    }
+
+    /// A Discord user's display name arrived: remember them (keeping any rename and colour).
+    fn met(&self, user: u64, discord_name: &str) {
+        {
+            let mut people = self.people.lock().unwrap();
+            let id = user.to_string();
+            match people.iter_mut().find(|p| p.id == id) {
+                Some(p) => p.discord = discord_name.to_string(),
+                None => {
+                    let color = PALETTE[people.len() % PALETTE.len()].to_string();
+                    people.push(Person { id, discord: discord_name.to_string(), name: None, color });
+                }
+            }
+            let _ = save_people(&people);
+        }
+        {
+            let mut ids = self.in_call.lock().unwrap();
+            if !ids.contains(&user) {
+                ids.push(user);
+            }
+        }
+        self.emit_people();
+    }
+
+    fn person(&self, user: u64) -> (String, String) {
+        let my = self.opts.lock().unwrap().my_name.clone();
+        let people = self.people.lock().unwrap();
+        match people.iter().find(|p| p.id == user.to_string()) {
+            Some(p) if !my.is_empty() && p.shown().eq_ignore_ascii_case(&my) => (p.shown().to_string(), ME_COLOR.into()),
+            Some(p) => (p.shown().to_string(), p.color.clone()),
+            None => (UNKNOWN.into(), UNKNOWN_COLOR.into()),
+        }
+    }
+
+    /// Discord mode: the bot joins the call; each person gets their own sentence cutter.
+    fn start_discord(self: &Arc<Self>, target: discord::DiscordTarget, tx: mpsc::Sender<Sentence>) -> Result<discord::DiscordCall> {
+        let sinks: Arc<Mutex<HashMap<u64, Arc<Mutex<Vec<f32>>>>>> = Default::default();
+        let tx = Mutex::new(tx);
+        let (me1, me2, me3, me4) = (self.clone(), self.clone(), self.clone(), self.clone());
+        discord::DiscordCall::start(
+            target,
+            discord::Callbacks {
+                audio: Box::new(move |user, pcm| {
+                    let mut map = sinks.lock().unwrap();
+                    let sink = map.entry(user).or_insert_with(|| {
+                        let sink = Arc::new(Mutex::new(vec![]));
+                        let (me, s, tx) = (me1.clone(), sink.clone(), tx.lock().unwrap().clone());
+                        std::thread::spawn(move || me.listen(0, Some(user), s, tx));
+                        sink
+                    });
+                    sink.lock().unwrap().extend_from_slice(pcm);
+                }),
+                name: Box::new(move |user, name| me2.met(user, name)),
+                problem: Box::new(move |msg, fatal| {
+                    me3.emit("team.error", json!({"message": msg, "fatal": fatal}));
+                    if fatal {
+                        me3.stop();
+                    }
+                }),
+                joined: Box::new(move |channel| {
+                    me4.emit("team.status", json!({"state": "live", "message": format!("Listening in {channel}…"),
+                        "transcript": me4.transcript_path.lock().unwrap().as_ref().map(|p| p.to_string_lossy().into_owned())}));
+                }),
+            },
+        )
+    }
+
     fn main(self: Arc<Self>) {
         let r = (|| -> Result<()> {
             let o = self.opts.lock().unwrap().clone();
-            if o.team_device.is_none() && o.mic_device.is_none() {
+            if o.discord.is_none() && o.team_device.is_none() && o.mic_device.is_none() {
                 return Err(JobError("Pick the device your team call plays on, your microphone, or both.".into()).into());
             }
             self.emit("team.status", json!({"state": "loading", "message": format!("Loading Whisper {}…", o.model)}));
             let m = self.engines.whisper(&o.model, o.custom_model.as_deref().filter(|_| o.model == "custom"), &|s| st_appkit::logs::info(s), &|_| {}, &self.stop_event)?;
             *self.model.lock().unwrap() = Some(m);
-            if o.team_device.is_some() && !o.voices.is_empty() && !speakers::model_ready() {
+            if o.discord.is_none() && o.team_device.is_some() && !o.voices.is_empty() && !speakers::model_ready() {
                 self.emit("team.status", json!({"state": "loading", "message": "Downloading the voice model (26 MB)…"}));
                 speakers::download_model(&|_| {})?;
             }
@@ -374,8 +505,49 @@ impl TeamSession {
                 wo.without_timestamps = true;
                 let _ = m.transcribe(&quiet, &wo, &|_| {}, &mut |_| {}, &self.stop_event);
             }
-            if o.team_device.is_some() && !o.voices.is_empty() {
+            if o.discord.is_none() && o.team_device.is_some() && !o.voices.is_empty() {
                 let _ = speakers::embedding(&quiet);
+            }
+            if let Some(target) = o.discord.clone() {
+                let (tx, rx) = mpsc::channel::<Sentence>();
+                let me = self.clone();
+                std::thread::spawn(move || me.worker(rx));
+                self.emit("team.status", json!({"state": "loading", "message": "Joining the Discord call…"}));
+                // test hook: each WAV in the folder plays as one person in the call, named after the file
+                if let Ok(dir) = std::env::var("ST_DISCORD_FAKE") {
+                    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)?.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "wav")).collect();
+                    files.sort();
+                    for (i, f) in files.into_iter().enumerate() {
+                        let user = 1000 + i as u64;
+                        let audio = st_media::ffmpeg::decode_audio(&f)?;
+                        self.met(user, &f.file_stem().unwrap().to_string_lossy());
+                        let sink = Arc::new(Mutex::new(vec![]));
+                        let (me, s, tx) = (self.clone(), sink.clone(), tx.clone());
+                        std::thread::spawn(move || me.listen(0, Some(user), s, tx));
+                        let me = self.clone();
+                        std::thread::spawn(move || {
+                            let t0 = Instant::now();
+                            let mut sent = 0;
+                            while !me.stop_event.wait(0.02) {
+                                let due = ((t0.elapsed().as_secs_f64() * SR as f64) as usize).min(audio.len());
+                                let mut s = sink.lock().unwrap();
+                                s.extend_from_slice(&audio[sent..due]);
+                                if due == audio.len() {
+                                    s.extend(std::iter::repeat_n(0.0, SR / 50));
+                                }
+                                sent = due;
+                            }
+                        });
+                    }
+                    self.emit("team.status", json!({"state": "live", "message": "Listening in test call…",
+                        "transcript": self.transcript_path.lock().unwrap().as_ref().map(|p| p.to_string_lossy().into_owned())}));
+                    while !self.stop_event.wait(0.5) {}
+                    return Ok(());
+                }
+                let call = self.start_discord(target, tx)?;
+                while !self.stop_event.wait(0.5) {}
+                drop(call);
+                return Ok(());
             }
 
             // capture both sources here: audio streams stay on the thread that opened them
@@ -392,7 +564,7 @@ impl TeamSession {
                 .map_err(|e| JobError(format!("Couldn't open the {label} device: {e:#}")))?;
                 sources.push(src);
                 let (me, tx) = (self.clone(), tx.clone());
-                std::thread::spawn(move || me.listen(i, sink, tx));
+                std::thread::spawn(move || me.listen(i, None, sink, tx));
             }
             drop(tx);
             let me = self.clone();
@@ -429,15 +601,15 @@ impl TeamSession {
     }
 
     /// One source: sound → sentences (and the level meter).
-    fn listen(&self, source: usize, sink: Arc<Mutex<Vec<f32>>>, tx: mpsc::Sender<Sentence>) {
+    fn listen(&self, source: usize, user: Option<u64>, sink: Arc<Mutex<Vec<f32>>>, tx: mpsc::Sender<Sentence>) {
         let mut seg = Segmenter::new();
         while !self.stop_event.wait(0.2) {
             let mut more = std::mem::take(&mut *sink.lock().unwrap());
-            self.emit("team.level", json!({"source": source, "level": level(&more)}));
+            self.emit("team.level", json!({"source": source, "user": user.map(|u| u.to_string()), "level": level(&more)}));
             match seg.push(&mut more) {
                 Ok(done) => {
                     for (audio, s, _) in done {
-                        let _ = tx.send(Sentence { source, audio, t0: s as f64 / SR as f64, heard: Instant::now() });
+                        let _ = tx.send(Sentence { source, user, audio, t0: s as f64 / SR as f64, heard: Instant::now() });
                     }
                 }
                 Err(e) => {
@@ -463,6 +635,9 @@ impl TeamSession {
 
     /// (name, colour) for a sentence.
     fn speaker(&self, s: &Sentence) -> (String, String) {
+        if let Some(u) = s.user {
+            return self.person(u);
+        }
         let o = self.opts.lock().unwrap();
         if s.source == 1 {
             return (o.my_name.clone(), ME_COLOR.into());
@@ -486,11 +661,21 @@ impl TeamSession {
 
     fn caption(&self, s: &Sentence) -> Result<()> {
         let t_proc = Instant::now();
-        let (name, color) = self.speaker(s);
+        // a cough or a click: too short to be words, and Whisper tends to invent a line for it
+        if (s.audio.len() as f64) < MIN_WORDS_S * SR as f64 {
+            return Ok(());
+        }
         let (lang, use_glossary, champions, names) = {
             let o = self.opts.lock().unwrap();
             let mut names: Vec<String> = o.voices.iter().map(|v| v.name.clone()).collect();
+            if o.discord.is_some() {
+                // everyone in the call, so Whisper spells their names right
+                let ids = self.in_call.lock().unwrap().clone();
+                let people = self.people.lock().unwrap();
+                names.extend(people.iter().filter(|p| ids.iter().any(|i| i.to_string() == p.id)).map(|p| p.shown().to_string()));
+            }
             names.push(o.my_name.clone());
+            names.retain(|n| !n.trim().is_empty());
             (o.language.clone(), o.use_glossary, o.champions.clone(), names)
         };
         let model = self.model.lock().unwrap().clone().expect("model loaded");
@@ -504,6 +689,9 @@ impl TeamSession {
         o.beam_size = 5;
         o.vad = false;
         o.without_timestamps = true;
+        // a caption that takes 10 s is useless live: one retry at most, and no more text than ~4 words a second
+        o.temperatures = &[0.0, 0.4];
+        o.max_tokens = (24.0 + 14.0 * s.audio.len() as f64 / SR as f64) as usize;
         let segs = model.transcribe(&s.audio, &o, &|_| {}, &mut |_| {}, &self.stop_event)?;
         let text = {
             let gl = self.glossary.lock().unwrap();
@@ -515,8 +703,11 @@ impl TeamSession {
                 })
                 .collect::<Vec<_>>()
                 .join(" ");
+            let t = collapse_repeats(&t);
             if use_glossary { gl.fix(&t, true, &names).0 } else { t }
         };
+        // who said it, looked up now rather than before translating, so a rename meanwhile is used
+        let (name, color) = self.speaker(s);
         if text.is_empty() || self.stop_event.is_set() {
             return Ok(());
         }
@@ -529,6 +720,47 @@ impl TeamSession {
             let _ = append(p, &format!("[{} | +{}]  {name}: {text}\n", now.format("%H:%M:%S"), format_ts(self.started.elapsed().as_secs_f64())));
         }
         Ok(())
+    }
+}
+
+/// "I'm not sure if I should say it, but I'm not sure if I should say it" -> said once. Whisper repeats
+/// itself on short, unclear pieces; a phrase of 3+ words said twice or more in a row is kept once.
+pub fn collapse_repeats(text: &str) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let keys: Vec<String> = words.iter().map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()).collect();
+    let mut out: Vec<&str> = vec![];
+    let mut i = 0;
+    'outer: while i < words.len() {
+        for n in (3..=(words.len() - i) / 2).rev() {
+            for gap in 0..=1 {
+                let j = i + n + gap;
+                if j + n > words.len() || (gap == 1 && !["but", "and", "so", "like"].contains(&keys[i + n].as_str())) {
+                    continue;
+                }
+                if keys[i..i + n] == keys[j..j + n] {
+                    // keep the last copy only
+                    i = j;
+                    continue 'outer;
+                }
+            }
+        }
+        out.push(words[i]);
+        i += 1;
+    }
+    out.join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collapse_repeats;
+
+    #[test]
+    fn repeats_are_said_once() {
+        assert_eq!(collapse_repeats("I'm not sure if I should say it or not, I'm not sure if I should say it or not"), "I'm not sure if I should say it or not");
+        assert_eq!(collapse_repeats("I'm not sure if I should say it or not, but I'm not sure if I should say it or not"), "I'm not sure if I should say it or not");
+        assert_eq!(collapse_repeats("go go go now"), "go go go now");
+        assert_eq!(collapse_repeats("we are going to win we are going to win we are going to win"), "we are going to win");
+        assert_eq!(collapse_repeats("Flash is down on their ADC, go now."), "Flash is down on their ADC, go now.");
     }
 }
 

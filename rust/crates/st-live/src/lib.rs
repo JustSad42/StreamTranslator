@@ -3,6 +3,7 @@
 
 pub mod chat;
 pub mod devices;
+pub mod discord;
 pub mod obs;
 pub mod session;
 pub mod team;

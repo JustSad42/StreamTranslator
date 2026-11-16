@@ -690,6 +690,7 @@ function initLive() {
   $('#ovTog').onchange = async e => { const shown = await api('overlay.show', { show: e.target.checked }); if (shown) api('overlay.style', { font: +$('#ovFont').value, bg: $('#ovBg').value / 100, orig: $('#liveOrig').checked }); };
   $('#obsBtn').onclick = async () => { const url = await api('obs.url'); const box = $('#obsUrl'); $('code', box).textContent = url; box.hidden = false; };
   $('#obsCopy').onclick = () => { api('os.copy', { text: $('#obsUrl code').textContent }); toast('OBS link copied', 'good', 2000); };
+  initObsStyle();
   $('#liveOpenTx').onclick = () => S.live.transcript && api('os.open', { path: S.live.transcript });
   $('#liveClear').onclick = () => { $('#liveFeed').innerHTML = ''; };
   const feed = $('#liveFeed');
@@ -765,6 +766,40 @@ on('live.error', m => {
   if (m.fatal !== false && !S.live.on) { S.live.starting = false; liveButton(false); $('#liveState').textContent = 'Not live'; }
 });
 
+/* ================================================================ OBS CAPTION STYLE */
+// Saved in settings (obs_style) and pushed to every open OBS browser source at once; the preview is the
+// real OBS page in demo mode, scaled down.
+const OBS_DEFAULT = { size: 42, bg: 0.6, pos: 7, place: 'bottom', align: 'center', lines: 3, hide: 12, names: 'color', stroke: true, width: 80, font: 'Segoe UI', orig: true, fade: true };
+function initObsStyle() {
+  S.obsStyle = { ...OBS_DEFAULT, ...(S.settings.obs_style || {}) };
+  const push = debounce(() => { S.settings.obs_style = { ...S.obsStyle }; api('obs.style', { style: S.obsStyle }).catch(e => toast(e.message, 'bad')); }, 120);
+  const set = (k, v) => { S.obsStyle[k] = v; label(); push(); };
+  const label = () => { const o = S.obsStyle; $('#osSizeV').textContent = o.size + 'px'; $('#osBgV').textContent = Math.round(o.bg * 100) + '%'; $('#osPosV').textContent = o.pos + '%'; $('#osWidthV').textContent = o.width + '%'; };
+  const ranges = [['#osSize', 'size', v => +v, v => v], ['#osBg', 'bg', v => v / 100, v => Math.round(v * 100)], ['#osPos', 'pos', v => +v, v => v], ['#osWidth', 'width', v => +v, v => v]];
+  ranges.forEach(([id, k, f]) => { const el = $(id); el.oninput = () => set(k, f(el.value)); });
+  const segs = {};
+  [['#osPlace', 'place', String], ['#osAlign', 'align', String], ['#osLines', 'lines', Number], ['#osHide', 'hide', Number], ['#osNames', 'names', String]].forEach(([id, k, f]) => { segs[k] = seg($(id), v => set(k, f(v))); });
+  $('#osFont').onchange = e => set('font', e.target.value);
+  const toggles = [['#osStroke', 'stroke'], ['#osFade', 'fade'], ['#osOrig', 'orig']];
+  toggles.forEach(([id, k]) => { $(id).onchange = e => set(k, e.target.checked); });
+  const sync = () => {
+    const o = S.obsStyle;
+    ranges.forEach(([id, k, , g]) => { $(id).value = g(o[k]); });
+    Object.entries(segs).forEach(([k, sg]) => sg.set(String(o[k])));
+    $('#osFont').value = o.font; toggles.forEach(([id, k]) => { $(id).checked = !!o[k]; }); label();
+  };
+  $('#osReset').onclick = () => { S.obsStyle = { ...OBS_DEFAULT }; sync(); push(); toast('Caption style reset', '', 2000); };
+  sync();
+  const fit = () => { const box = $('#obsPreview'); $('iframe', box).style.transform = `scale(${box.clientWidth / 1920})`; };
+  if (!S.obsFit) { S.obsFit = true; new ResizeObserver(fit).observe($('#obsPreview')); }
+  $('#obsStyle').ontoggle = async () => {
+    if (!$('#obsStyle').open) return;
+    const f = $('#obsPreview iframe');
+    if (!f.src) { try { f.src = (await api('obs.url')) + '?demo'; } catch (e) { toast(e.message, 'bad'); } }
+    requestAnimationFrame(fit);
+  };
+}
+
 /* ================================================================ TEAM VOICE */
 // Your team's voice call, captioned with each speaker's name: the device the call plays on (recorded in
 // loopback) plus your own mic. Teammates are recognised by voices learned once, before the game.
@@ -782,7 +817,77 @@ function initTeam() {
   $('#learnBtn').onclick = () => learnVoice($('#learnName').value);
   $('#learnName').addEventListener('keydown', e => { if (e.key === 'Enter') learnVoice(e.target.value); });
   $('#learnCancel').onclick = () => api('team.learn_cancel');
+  const src = seg($('#teamSrcSeg'), v => { setSetting('team_source', v); applyTeamSource(v); });
+  S.team.source = st.team_source === 'discord' ? 'discord' : 'device'; src.set(S.team.source); applyTeamSource(S.team.source);
+  $('#dcToken').value = st.discord_token || '';
+  $('#dcConnect').onclick = () => discordConnect(true);
+  $('#dcToken').addEventListener('keydown', e => { if (e.key === 'Enter') discordConnect(true); });
+  $('#dcChan').onchange = e => { const [g, c] = (e.target.value || '|').split('|'); setSetting('discord_guild', g); setSetting('discord_channel', c); };
 }
+// ---- Discord bot source: each person separately, by their Discord name
+function applyTeamSource(v) {
+  S.team.source = v; const dc = v === 'discord';
+  if (S.liveMode === 'team' && !S.live.on && !S.team.on) $('#liveTitle').textContent = teamIntro();
+  $$('#page-live .src-discord').forEach(e => e.hidden = !dc);
+  $$('#page-live .src-device').forEach(e => e.hidden = dc);
+  if (dc && !S.team.dcLoaded && S.settings.discord_token) discordConnect(false);
+}
+async function discordConnect(user) {
+  const token = $('#dcToken').value.trim();
+  if (!token) { if (user) { toast('Paste the bot token first.', 'bad'); $('#dcToken').focus(); } return; }
+  const b = $('#dcConnect'); b.classList.add('busy'); b.disabled = true;
+  try {
+    const r = await api('team.discord_channels', { token });
+    if (token !== S.settings.discord_token) setSetting('discord_token', token);
+    S.team.dcLoaded = true;
+    const sel = $('#dcChan'); sel.innerHTML = '';
+    const saved = `${S.settings.discord_guild}|${S.settings.discord_channel}`;
+    let count = 0;
+    r.servers.forEach(sv => { if (!sv.channels.length) return; const g = h('optgroup', { label: sv.name }); sv.channels.forEach(c => { g.append(h('option', { value: `${sv.id}|${c.id}` }, '🔊 ' + c.name)); count++; }); sel.append(g); });
+    if (!count) sel.append(h('option', { value: '' }, r.servers.length ? 'No voice channels the bot can see' : 'Invite the bot to your server first'));
+    const vals = $$('option', sel).map(o => o.value);
+    sel.value = vals.includes(saved) ? saved : (vals[0] || '');
+    if (sel.value && sel.value !== saved) sel.onchange({ target: sel });
+    const box = $('#dcBot'); box.hidden = false; box.innerHTML = '';
+    box.append(h('div', {}, h('span', { class: 'ok' }, '● Connected'), ` as ${r.bot} · in ${r.servers.length} server${r.servers.length === 1 ? '' : 's'}`),
+      h('div', { class: 'muted small' }, r.servers.length ? 'Not in your team\'s server yet? Send this invite link to someone who can manage it:' : 'Next: send this invite link to someone who can manage your team\'s server, then press Connect again.'),
+      h('div', { class: 'invite' }, h('code', {}, r.invite), h('button', { class: 'btn ghost sm', onclick: () => { api('os.copy', { text: r.invite }); toast('Invite link copied', 'good', 2000); } }, 'Copy')));
+    if (user) toast(`Connected as ${r.bot}`, 'good', 2500);
+  } catch (e) { if (user) toast(e.message, 'bad', 8000); else $('#dcChan').innerHTML = '<option value="">Press Connect →</option>'; }
+  finally { b.classList.remove('busy'); b.disabled = false; }
+}
+S.team.people = []; S.team.talking = {};
+function renderPeople() {
+  const root = $('#peopleList'); root.innerHTML = '';
+  if (!S.team.people.length) { root.append(h('div', { class: 'voice-empty' }, S.team.on ? 'Waiting for someone to talk…' : 'People show up here when they talk. Click a name to change how it appears on stream.')); return; }
+  S.team.people.forEach(p => root.append(h('div', { class: 'voice', 'data-id': p.id, style: `--c:${p.color}` }, h('span', { class: 'dot', style: `background:${p.color}` }),
+    h('b', { class: 'vname', title: 'Click to rename', onclick: e => renamePerson(e.currentTarget, p) }, p.name),
+    p.renamed ? h('span', { class: 'sub', title: 'Discord name' }, '@' + p.discord) : '',
+    p.renamed ? h('button', { class: 'btn ghost sm', title: 'Use their Discord name again', onclick: () => renamePerson(null, p, '') }, '↺') : '',
+    h('span', { class: 'talk' }))));
+}
+async function renamePerson(el, p, direct) {
+  const apply = async to => {
+    try {
+      const v = await api('team.rename_person', { id: p.id, to });
+      $$('#liveFeed .who').forEach(w => { if (w.textContent === p.name) w.textContent = v.name; });
+      const now = $('#nowText .who'); if (now && now.textContent === p.name) now.textContent = v.name;
+      S.team.people = S.team.people.map(x => x.id === p.id ? v : x); renderPeople();
+      if (v.name !== p.name) toast(`${p.name} is now ${v.name}`, 'good', 2500);
+    } catch (e) { toast(e.message, 'bad'); renderPeople(); }
+  };
+  if (direct !== undefined) return apply(direct);
+  const input = h('input', { class: 'vname-in', value: p.name, maxlength: 24, spellcheck: 'false', placeholder: p.discord });
+  let done = false;
+  const finish = save => { if (done) return; done = true; const to = input.value.trim(); if (!save || to === p.name) { renderPeople(); return; } apply(to); };
+  input.onkeydown = e => { if (e.key === 'Enter') finish(true); if (e.key === 'Escape') finish(false); };
+  input.onblur = () => finish(true);
+  el.replaceWith(input); input.focus(); input.select();
+}
+on('team.people', m => { S.team.people = m.people || []; renderPeople(); });
+const teamIntro = () => S.team.source === 'discord'
+  ? 'Connect the Discord bot, pick your team\'s voice channel, then press Start. The bot hears everyone separately, so each line shows who said it, here, in the floating window and on OBS.'
+  : 'Pick the device your team call plays on and your mic, learn your teammates\' voices, then press Start. Each line shows who said it, here, in the floating window and on OBS.';
 function applyLiveMode(m) {
   S.liveMode = m;
   const team = m === 'team';
@@ -792,7 +897,7 @@ function applyLiveMode(m) {
   $('#liveThumb .thumb-empty').textContent = team ? 'Team call' : 'No stream yet';
   if (!S.live.on && !S.team.on) {
     $('#liveChannel').textContent = team ? 'Team voice' : 'Translate anyone, live';
-    $('#liveTitle').textContent = team ? 'Pick the device your team call plays on and your mic, learn your teammates\' voices, then press Start. Each line shows who said it, here, in the floating window and on OBS.'
+    $('#liveTitle').textContent = team ? teamIntro()
       : 'Type a channel and press Go live. Captions show here, in a floating window, or on your own stream through OBS.';
     $('#liveState').textContent = 'Idle';
   }
@@ -861,14 +966,18 @@ on('team.learn', m => {
   $('#learnText').textContent = m.f >= 1 ? 'Got it, saving…' : m.level > 0.25 ? `Hearing ${m.name}… ${Math.round(m.f * 100)}%` : `Waiting for ${m.name} to talk…`;
   meterLv = Math.max(meterLv, m.level); if (!meterRunning && meterTick && !document.hidden) { meterRunning = true; requestAnimationFrame(meterTick); }
 });
-function teamButton(on) { const b = $('#teamBtn'); b.classList.toggle('on', on); $('b', b).textContent = on ? 'Stop' : 'Start'; ['#teamDev', '#teamMic'].forEach(s => $(s).disabled = on); $$('#liveModeSeg button').forEach(x => x.disabled = on); }
+function teamButton(on) { const b = $('#teamBtn'); b.classList.toggle('on', on); $('b', b).textContent = on ? 'Stop' : 'Start'; ['#teamDev', '#teamMic', '#dcChan', '#dcToken', '#dcConnect'].forEach(s => $(s).disabled = on); $$('#liveModeSeg button, #teamSrcSeg button').forEach(x => x.disabled = on); }
 async function toggleTeam() {
   if (S.team.on || S.team.starting) { api('team.stop'); return; }
-  const team_device = $('#teamDev').value, mic_device = $('#teamMic').value;
-  if (!team_device && !mic_device) { toast('Pick the device your team call plays on, your microphone, or both.', 'bad'); return; }
+  const team_device = $('#teamDev').value, mic_device = $('#teamMic').value, source = S.team.source;
+  if (source === 'discord') {
+    if (!$('#dcToken').value.trim()) { toast('Paste your Discord bot token and press Connect first.', 'bad'); $('#dcToken').focus(); return; }
+    if (!$('#dcChan').value) { toast('Pick the voice channel first.', 'bad'); return; }
+    S.team.people = []; renderPeople();
+  } else if (!team_device && !mic_device) { toast('Pick the device your team call plays on, your microphone, or both.', 'bad'); return; }
   S.team.starting = true; teamButton(true); $('#liveState').textContent = 'Starting…';
   try {
-    await api('team.start', { team_device, mic_device, my_name: $('#teamName').value.trim(), language: $('#liveLang').value, use_glossary: $('#liveGloss').checked, champions: champsLive.get() });
+    await api('team.start', { source, team_device, mic_device, my_name: $('#teamName').value.trim(), language: $('#liveLang').value, use_glossary: $('#liveGloss').checked, champions: champsLive.get() });
   } catch (e) { toast(e.message, 'bad'); S.team.starting = false; teamButton(false); }
 }
 on('team.status', m => {
@@ -878,10 +987,10 @@ on('team.status', m => {
     if (!S.team.on) {
       S.team.on = true; S.team.starting = false; S.team.started = Date.now();
       clearInterval(S.team.timer); S.team.timer = setInterval(() => $('#stUp').textContent = fmt((Date.now() - S.team.started) / 1000), 1000);
-      $('#liveFeed').innerHTML = ''; $('#stLines').textContent = '0'; $('#liveChannel').textContent = 'Team voice'; toast('Team voice: listening', 'good', 2500);
+      $('#liveFeed').innerHTML = ''; $('#stLines').textContent = '0'; $('#liveChannel').textContent = 'Team voice'; toast(S.team.source === 'discord' ? 'The bot joined the call' : 'Team voice: listening', 'good', 2500);
     }
     document.body.classList.add('live-on'); teamButton(true);
-    st.textContent = '● Live · listening'; st.style.color = 'var(--live)';
+    st.textContent = S.team.source === 'discord' ? '● Live · ' + (m.message || 'listening').replace(/…$/, '') : '● Live · listening'; st.style.color = 'var(--live)';
     if (m.device === 'CPU') toast('Whisper is running on the CPU. Captions will lag a lot.', 'warn', 8000);
     $('#nowText').className = 'now-text idle'; $('#nowText').textContent = 'Listening for your team…'; $('#nowOrig').textContent = '';
   } else if (m.state === 'stopped') {
@@ -892,6 +1001,7 @@ on('team.status', m => {
   } else { st.textContent = m.message || m.state; st.style.color = ''; }
 });
 on('team.level', m => {
+  if (m.user) { const row = $(`#peopleList .voice[data-id="${m.user}"]`); if (row) row.classList.toggle('talking', m.level > 0.3); }
   meterLv = Math.max(meterLv, m.level);
   if (!meterRunning && meterTick && !document.hidden) { meterRunning = true; requestAnimationFrame(meterTick); }
 });

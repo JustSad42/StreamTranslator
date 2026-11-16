@@ -203,9 +203,14 @@
           <input id="liveInput" placeholder="Channel name or stream link — Twitch, YouTube, Kick…" spellcheck="false" autocomplete="off">
           <button class="btn live" id="liveBtn"><span class="rec"></span><b>Go live</b></button>
         </div>
+        <div class="team-src team-only" hidden>
+          <span>Hear the call through</span>
+          <div class="seg sm" id="teamSrcSeg"><button data-v="device" class="on">Audio device</button><button data-v="discord">Discord bot</button></div>
+        </div>
         <div class="team-grid team-only" hidden>
-          <label class="fld"><span>Team call plays on</span><select id="teamDev"></select></label>
-          <label class="fld"><span>My microphone</span><select id="teamMic"></select></label>
+          <label class="fld src-device"><span>Team call plays on</span><select id="teamDev"></select></label>
+          <label class="fld src-device"><span>My microphone</span><select id="teamMic"></select></label>
+          <label class="fld src-discord wide" hidden><span>Voice channel</span><select id="dcChan"><option value="">Connect the bot first →</option></select></label>
           <label class="fld"><span>My name</span><input id="teamName" placeholder="How you appear on stream" maxlength="24" spellcheck="false" autocomplete="off"></label>
           <button class="btn live" id="teamBtn"><span class="rec"></span><b>Start</b></button>
         </div>
@@ -245,12 +250,27 @@
       </div>
 
       <div class="card feed-card team-only" id="teamCard" hidden>
+        <div class="src-discord" hidden>
+          <div class="card-head"><div><h2>Discord bot</h2><div class="muted small">The bot joins your voice channel and hears everyone separately, by their Discord name.</div></div></div>
+          <div class="dc-connect">
+            <div class="learn-row"><input id="dcToken" type="password" placeholder="Paste the bot token" spellcheck="false" autocomplete="off"><button class="btn primary" id="dcConnect">Connect</button></div>
+            <div class="dc-bot" id="dcBot" hidden></div>
+            <details class="dc-help"><summary>How to get a bot token</summary>
+              <ol><li>Open <b>discord.com/developers/applications</b> → <b>New Application</b>.</li>
+              <li><b>Bot</b> → <b>Reset Token</b> → <b>Copy</b>, and paste it above. It stays on this PC.</li>
+              <li>Press <b>Connect</b>, then send the invite link to someone who can manage the server.</li></ol></details>
+          </div>
+          <div class="eyebrow dc-people-h">In the call</div>
+          <div class="voice-list" id="peopleList"><div class="voice-empty">People show up here when they talk. Click a name to change how it appears on stream.</div></div>
+        </div>
+        <div class="src-device">
         <div class="card-head"><div><h2>Teammates</h2><div class="muted small">Learn each voice once, so every line shows who said it.</div></div></div>
         <div class="voice-list" id="voiceList"></div>
         <div class="learn">
           <div class="learn-row"><input id="learnName" placeholder="Teammate's name" maxlength="24" spellcheck="false" autocomplete="off"><button class="btn primary" id="learnBtn">Learn voice</button></div>
           <div class="learn-prog" id="learnProg" hidden><div class="bar"><i id="learnBar"></i></div><span id="learnText">Listening…</span><button class="btn ghost sm" id="learnCancel">Cancel</button></div>
           <p class="muted small learn-tip">Ask one teammate to talk for about 10 seconds while everyone else stays quiet. The app listens on the "Team call" device, so join the call first.</p>
+        </div>
         </div>
       </div>
 
@@ -289,7 +309,25 @@
           <button class="btn ghost sm" id="obsBtn">Get link</button>
         </div>
         <div class="obs-url" id="obsUrl" hidden><code></code><button class="btn ghost sm" id="obsCopy">Copy</button>
-          <p>In OBS: <b>+ → Browser</b>, paste the link, size 1920×1080. Add <code>?size=56&amp;bg=0.4</code> to the link to change the style.</p></div>
+          <p>In OBS: <b>+ → Browser</b>, paste the link, size <b>1920×1080</b>. Style changes below show in OBS right away.</p></div>
+        <details class="obs-style" id="obsStyle">
+          <summary><b>Caption style</b><em>How the captions look on stream</em></summary>
+          <div class="obs-preview" id="obsPreview"><iframe title="Preview" tabindex="-1"></iframe></div>
+          <label class="fld"><span>Text size <em id="osSizeV"></em></span><input type="range" id="osSize" min="20" max="90"></label>
+          <label class="fld"><span>Background <em id="osBgV"></em></span><input type="range" id="osBg" min="0" max="100"></label>
+          <div class="fld"><span>Position</span><div class="seg full" id="osPlace"><button data-v="bottom">Bottom</button><button data-v="top">Top</button></div></div>
+          <label class="fld"><span>Distance from edge <em id="osPosV"></em></span><input type="range" id="osPos" min="0" max="40"></label>
+          <label class="fld"><span>Max width <em id="osWidthV"></em></span><input type="range" id="osWidth" min="40" max="100"></label>
+          <div class="fld"><span>Align</span><div class="seg full" id="osAlign"><button data-v="center">Center</button><button data-v="left">Left</button></div></div>
+          <div class="fld"><span>Lines on screen</span><div class="seg full" id="osLines"><button data-v="1">1</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="4">4</button></div></div>
+          <div class="fld"><span>Hide after</span><div class="seg full" id="osHide"><button data-v="6">6 s</button><button data-v="12">12 s</button><button data-v="20">20 s</button><button data-v="0">Never</button></div></div>
+          <div class="fld"><span>Speaker names</span><div class="seg full" id="osNames"><button data-v="color">Colour</button><button data-v="above">Above</button><button data-v="white">White</button><button data-v="off">Off</button></div></div>
+          <label class="fld"><span>Font</span><select id="osFont"><option>Segoe UI</option><option>Bahnschrift</option><option>Arial Black</option><option>Verdana</option><option>Trebuchet MS</option><option>Calibri</option></select></label>
+          <label class="toggle"><input type="checkbox" id="osStroke"><span class="sw"></span><div><b>Text outline</b><em>Readable over bright game scenes</em></div></label>
+          <label class="toggle"><input type="checkbox" id="osFade"><span class="sw"></span><div><b>Dim older lines</b><em>The newest line stands out</em></div></label>
+          <label class="toggle"><input type="checkbox" id="osOrig"><span class="sw"></span><div><b>Original language</b><em>Stream mode: under each English line</em></div></label>
+          <button class="btn ghost sm" id="osReset">Reset to default</button>
+        </details>
       </div>
     </aside>
   </div>

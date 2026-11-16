@@ -103,11 +103,18 @@ pub struct Options<'a> {
     /// false: Whisper hears the whole audio (live mode cuts its own pieces)
     pub vad: bool,
     pub without_timestamps: bool,
+    /// temperatures to try when a result looks like a loop (live captions try fewer, to stay quick)
+    pub temperatures: &'a [f32],
+    /// longest text per 30 s window, in tokens (live captions cap it so a loop can't run long)
+    pub max_tokens: usize,
 }
+
+pub const ALL_TEMPERATURES: &[f32] = &[0.0, 0.2, 0.4, 0.6, 0.8, 1.0];
 
 impl<'a> Options<'a> {
     pub fn new(language: &'a str, task: &'a str, hotwords: Option<&'a str>) -> Self {
-        Options { language, task, beam_size: 5, hotwords, no_speech_threshold: 0.6, min_silence_ms: 500.0, vad: true, without_timestamps: false }
+        Options { language, task, beam_size: 5, hotwords, no_speech_threshold: 0.6, min_silence_ms: 500.0, vad: true, without_timestamps: false,
+            temperatures: ALL_TEMPERATURES, max_tokens: MAX_LENGTH }
     }
 }
 
@@ -301,12 +308,13 @@ impl WhisperModel {
     /// (compression ratio > 2.4) or is unlikely (average log-probability < -1).
     fn generate_with_fallback(&self, enc: &StorageView, prompt: &[String], o: &Options) -> Result<(Vec<usize>, f64, f32, f32)> {
         let mut results: Vec<(Vec<usize>, f64, f32, f64, f32)> = vec![];
-        for &temp in &[0.0f32, 0.2, 0.4, 0.6, 0.8, 1.0] {
+        for &temp in o.temperatures {
             let mut w = WhisperOptions::default();
             w.length_penalty = 1.0;
             w.repetition_penalty = 1.0;
             w.no_repeat_ngram_size = 0;
-            w.max_length = MAX_LENGTH;
+            // the prompt (previous text, hotwords) counts towards the length
+            w.max_length = (o.max_tokens.max(16) + prompt.len()).min(MAX_LENGTH);
             w.return_scores = true;
             w.return_no_speech_prob = true;
             w.suppress_blank = true;

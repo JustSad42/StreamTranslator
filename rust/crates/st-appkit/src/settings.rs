@@ -18,6 +18,9 @@ pub fn defaults() -> Map<String, Value> {
         "custom_model": "", "setup_done": false, "app_update": true, "speakers": false,
         "last_version": "", "updated_from": "", "skip_version": "",
         "live_mode": "stream", "team_device": "", "team_mic": "", "team_name": "", "team_language": "ar",
+        "team_source": "device", "discord_token": "", "discord_guild": "", "discord_channel": "",
+        "obs_style": {"size": 42, "bg": 0.6, "pos": 7, "place": "bottom", "align": "center", "lines": 3, "hide": 12,
+            "names": "color", "stroke": true, "width": 80, "font": "Segoe UI", "orig": true, "fade": true},
     });
     v.as_object().unwrap().clone()
 }
