@@ -7,7 +7,12 @@ use std::sync::{Arc, Mutex, Weak};
 use anyhow::Result;
 use serde_json::{json, Map, Value};
 use st_core::sync::{classify, Kind};
-use st_live::{chat::ChatSession, obs::ObsServer, Emit, LiveOptions, LiveSession};
+use st_live::{
+    chat::ChatSession,
+    obs::ObsServer,
+    team::{self, TeamOptions, TeamSession, Voice},
+    Emit, LiveOptions, LiveSession,
+};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use super::{b, s, Backend};
@@ -41,6 +46,7 @@ body:hover #hint{display:block}
 .t{text-align:center;font-weight:700;color:#fff;font-size:var(--size,30px);line-height:1.25;
  text-shadow:-1.5px 0 #000c,1.5px 0 #000c,0 -1.5px #000c,0 1.5px #000c;overflow-wrap:anywhere}
 .t.partial{color:rgba(255,255,255,.67)}
+.t.team{font-size:calc(var(--size,30px)*.85)} .who{font-weight:800}
 .o{text-align:center;font-weight:400;color:rgba(190,190,205,.86);font-size:max(12px,calc(var(--size,30px)*.55));
  text-shadow:-1.5px 0 #000c,1.5px 0 #000c,0 -1.5px #000c,0 1.5px #000c}
 </style></head><body>
@@ -51,6 +57,11 @@ let cap = { text: 'Captions will appear here', orig: '', partial: false }, showO
 function render() {
   box.querySelectorAll('.t,.o').forEach(e => e.remove());
   box.classList.toggle('on', !!cap.text);
+  if (cap.lines) {
+    cap.lines.forEach(l => { const d = document.createElement('div'); d.className = 't team'; const n = document.createElement('span'); n.className = 'who';
+      n.style.color = l.color; n.textContent = l.name + ': '; d.append(n, l.text); box.appendChild(d); });
+    return;
+  }
   if (cap.text) { const d = document.createElement('div'); d.className = 't' + (cap.partial ? ' partial' : ''); d.textContent = cap.text; box.appendChild(d); }
   if (cap.orig && showOrig) { const o = document.createElement('div'); o.className = 'o'; o.textContent = cap.orig; box.appendChild(o); }
 }
@@ -185,7 +196,192 @@ impl Backend {
     }
 
     pub(super) fn live_running(&self) -> bool {
-        self.live.lock().unwrap().as_ref().is_some_and(|l| !l.is_stopped())
+        self.live.lock().unwrap().as_ref().is_some_and(|l| !l.is_stopped()) || self.team.lock().unwrap().as_ref().is_some_and(|t| !t.is_stopped())
+    }
+
+    // ---------------------------------------------------------------- team voice
+
+    pub(super) fn team_start(&self, p: &Value) -> Result<Value> {
+        self.team_stop();
+        self.live_stop();
+        let (save_dir, custom) = {
+            let st = self.settings.lock().unwrap();
+            (st.str("out_dir"), st.str("custom_model"))
+        };
+        let dev = |k: &str| Some(s(p, k)).filter(|d| !d.is_empty());
+        let opts = TeamOptions {
+            team_device: dev("team_device"),
+            mic_device: dev("mic_device"),
+            my_name: Some(s(p, "my_name").trim().to_string()).filter(|n| !n.is_empty()).unwrap_or("Me".into()),
+            model: Some(s(p, "model")).filter(|m| !m.is_empty()).unwrap_or("large-v3".into()),
+            custom_model: Some(custom).filter(|c| !c.is_empty()).map(Into::into),
+            language: Some(s(p, "language")).filter(|l| !l.is_empty()),
+            use_glossary: b(p, "use_glossary", true),
+            champions: p["champions"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+            save_dir: save_dir.into(),
+            voices: team::load_voices(),
+        };
+        let slot: Arc<Mutex<Weak<TeamSession>>> = Arc::new(Mutex::new(Weak::new()));
+        let (app, sl) = (self.app.clone(), slot.clone());
+        let emit: Emit = Arc::new(move |kind: &str, data: Value| {
+            let be = app.state::<Arc<Backend>>();
+            be.team_event(sl.lock().unwrap().upgrade().as_deref(), kind, data);
+        });
+        let t = TeamSession::new(opts, self.engines.clone(), self.glossary.clone(), emit);
+        *slot.lock().unwrap() = Arc::downgrade(&t);
+        self.team_recent.lock().unwrap().clear();
+        *self.team.lock().unwrap() = Some(t.clone());
+        t.start();
+        Ok(json!(true))
+    }
+
+    pub(super) fn team_stop(&self) -> Value {
+        if let Some(t) = self.team.lock().unwrap().as_ref() {
+            t.stop();
+        }
+        json!(true)
+    }
+
+    pub(super) fn team_update(&self, p: &Value) -> Value {
+        if let Some(t) = self.team.lock().unwrap().as_ref() {
+            t.update(p);
+        }
+        json!(true)
+    }
+
+    fn team_event(&self, team: Option<&TeamSession>, kind: &str, data: Value) {
+        let stopped = kind == "team.status" && data["state"] == "stopped";
+        let fatal_error = (kind == "team.error" && data.get("fatal") != Some(&json!(false))).then(|| s(&data, "message"));
+        if kind == "team.caption" {
+            // the caption window and OBS show the last few lines, each with its speaker
+            let lines = {
+                let mut r = self.team_recent.lock().unwrap();
+                r.push(json!({"id": data["id"], "name": data["name"], "color": data["color"], "text": data["text"]}));
+                let extra = r.len().saturating_sub(3);
+                r.drain(..extra);
+                r.clone()
+            };
+            let c = json!({"text": data["text"], "orig": "", "partial": false, "lines": lines});
+            if self.app.get_webview_window("overlay").is_some_and(|w| w.is_visible().unwrap_or(false)) {
+                let _ = self.app.emit("overlay-caption", c.clone());
+            }
+            if let Some(obs) = self.obs.lock().unwrap().as_ref() {
+                obs.send(&c);
+            }
+        }
+        self.emit(kind, data);
+        if stopped {
+            if let Some(t) = team {
+                self.save_team(t);
+            }
+        }
+        if let Some(m) = fatal_error {
+            self.notify("Team voice stopped", &m);
+        }
+    }
+
+    fn save_team(&self, t: &TeamSession) {
+        use std::sync::atomic::Ordering;
+        let Some(transcript) = t.transcript_path.lock().unwrap().clone() else { return };
+        let lines = t.lines.load(Ordering::SeqCst);
+        if lines == 0 {
+            return;
+        }
+        let mut e = Map::new();
+        for (k, v) in [
+            ("type", json!("live")), ("channel", json!("Team voice")), ("title", json!("Team voice call")), ("url", json!("")),
+            ("transcript", json!(transcript.to_string_lossy())), ("srt", Value::Null), ("thumb", Value::Null), ("lines", json!(lines)),
+            ("duration", st_core::py::f(t.started.elapsed().as_secs_f64())),
+        ] {
+            e.insert(k.into(), v);
+        }
+        match self.history.add(e) {
+            Ok(_) => self.emit("history.changed", json!({})),
+            Err(err) => st_appkit::logs::warning(&format!("Couldn't save the team session to History: {err}")),
+        }
+    }
+
+    /// Listen to one teammate for ~10 s and save their voice under `name` (replacing an earlier one).
+    pub(super) fn team_learn(&self, p: &Value) -> Result<Value> {
+        let name = s(p, "name").trim().to_string();
+        if name.is_empty() {
+            return Err(st_core::JobError("Type the teammate's name first.".into()).into());
+        }
+        let device = s(p, "device");
+        if device.is_empty() {
+            return Err(st_core::JobError("Pick the device your team call plays on first.".into()).into());
+        }
+        let cancel = st_core::cancel::Cancel::new();
+        *self.team_learn.lock().unwrap() = Some(cancel.clone());
+        let r = team::learn_voice(&device, &|f, level| self.emit("team.learn", json!({"name": name, "f": (f * 1000.0).round() / 1000.0, "level": level})), &cancel);
+        *self.team_learn.lock().unwrap() = None;
+        let emb = r?;
+        let mut voices = team::load_voices();
+        let color = match voices.iter().find(|v| v.name.eq_ignore_ascii_case(&name)) {
+            Some(v) => v.color.clone(),
+            None => team::PALETTE.iter().find(|c| !voices.iter().any(|v| v.color == **c)).unwrap_or(&team::PALETTE[voices.len() % team::PALETTE.len()]).to_string(),
+        };
+        voices.retain(|v| !v.name.eq_ignore_ascii_case(&name));
+        voices.push(Voice { name, color, emb });
+        team::save_voices(&voices)?;
+        if let Some(t) = self.team.lock().unwrap().as_ref() {
+            t.set_voices(voices.clone());
+        }
+        Ok(team::voices_view(&voices))
+    }
+
+    pub(super) fn team_learn_cancel(&self) -> Value {
+        if let Some(c) = self.team_learn.lock().unwrap().as_ref() {
+            c.set();
+        }
+        json!(true)
+    }
+
+    /// Rename a learned voice. New lines use the new name; the lines still on screen (caption window and
+    /// OBS) are updated too.
+    pub(super) fn team_rename(&self, name: &str, to: &str) -> Result<Value> {
+        let to = to.trim();
+        if to.is_empty() {
+            return Err(st_core::JobError("Type a name.".into()).into());
+        }
+        let mut voices = team::load_voices();
+        if voices.iter().any(|v| v.name.eq_ignore_ascii_case(to) && v.name != name) {
+            return Err(st_core::JobError(format!("There's already a teammate called {to}.")).into());
+        }
+        for v in voices.iter_mut().filter(|v| v.name == name) {
+            v.name = to.to_string();
+        }
+        team::save_voices(&voices)?;
+        if let Some(t) = self.team.lock().unwrap().as_ref() {
+            t.set_voices(voices.clone());
+        }
+        let lines = {
+            let mut r = self.team_recent.lock().unwrap();
+            for l in r.iter_mut().filter(|l| l["name"] == name) {
+                l["name"] = json!(to);
+            }
+            r.clone()
+        };
+        if let Some(last) = lines.last() {
+            let c = json!({"text": last["text"], "orig": "", "partial": false, "lines": lines});
+            if self.app.get_webview_window("overlay").is_some_and(|w| w.is_visible().unwrap_or(false)) {
+                let _ = self.app.emit("overlay-caption", c.clone());
+            }
+            if let Some(obs) = self.obs.lock().unwrap().as_ref() {
+                obs.send(&c);
+            }
+        }
+        Ok(team::voices_view(&voices))
+    }
+
+    pub(super) fn team_forget(&self, name: &str) -> Result<Value> {
+        let mut voices = team::load_voices();
+        voices.retain(|v| v.name != name);
+        team::save_voices(&voices)?;
+        if let Some(t) = self.team.lock().unwrap().as_ref() {
+            t.set_voices(voices.clone());
+        }
+        Ok(team::voices_view(&voices))
     }
 
     // ---------------------------------------------------------------- chat

@@ -124,7 +124,7 @@ function syncTurbo() {
   if (whisperOnly && modelSeg.get() === 'large-v3-turbo') { modelSeg.set('large-v3'); setSetting('model', 'large-v3'); }
   $('#methodHint').textContent = whisperOnly ? 'Whisper translates directly (the original method)' : 'Whisper writes it down, then a translator turns it into English';
 }
-let nav, srcMode, modelSeg, qualSeg, sizeSeg, liveModel, champsClip, champsLive, customWords, syncTheirs;
+let nav, srcMode, modelSeg, qualSeg, sizeSeg, liveModel, liveModeSeg, champsClip, champsLive, customWords, syncTheirs;
 
 async function boot() {
   nav = seg($('#nav'), showPage);
@@ -663,11 +663,14 @@ const METER_N = 18; let meterBars = [], meterLv = 0;
 function initLive() {
   const st = S.settings;
   $('#liveLang').value = st.live_language || '';
-  $('#liveLang').onchange = e => { setSetting('live_language', e.target.value); if (S.live.on) api('live.update', { language: e.target.value }); };
+  $('#liveLang').onchange = e => {
+    if (S.liveMode === 'team') { setSetting('team_language', e.target.value); if (S.team.on) api('team.update', { language: e.target.value }); return; }
+    setSetting('live_language', e.target.value); if (S.live.on) api('live.update', { language: e.target.value });
+  };
   liveModel = seg($('#liveModelSeg'), v => setSetting('live_model', v)); liveModel.set(st.live_model);
   liveMethod = seg($('#liveMethodSeg'), v => { setSetting('live_method', v); if (S.live.on) api('live.update', { method: v }); }); liveMethod.set(st.live_method || 'two-step');
   $('#liveOrig').checked = st.live_orig; $('#liveOrig').onchange = e => { setSetting('live_orig', e.target.checked); if (S.live.on) api('live.update', { orig: e.target.checked }); };
-  $('#liveGloss').onchange = e => S.live.on && api('live.update', { use_glossary: e.target.checked });
+  $('#liveGloss').onchange = e => { if (S.live.on) api('live.update', { use_glossary: e.target.checked }); if (S.team.on) api('team.update', { use_glossary: e.target.checked }); };
   $('#liveIso').checked = st.live_isolate;
   $('#liveIso').onchange = e => { setSetting('live_isolate', e.target.checked); if (S.live.on) api('live.update', { isolate: e.target.checked }); };
   $('#liveChat').checked = st.live_chat;
@@ -676,8 +679,9 @@ function initLive() {
   const cf = $('#chatFeed');
   cf.addEventListener('scroll', () => { if (cf.scrollHeight - cf.scrollTop - cf.clientHeight < 40) $('#chatJump').hidden = true; });
   $('#chatJump').onclick = () => { cf.scrollTo({ top: cf.scrollHeight, behavior: 'smooth' }); $('#chatJump').hidden = true; };
-  champsLive = chipInput($('#champsLive'), { placeholder: 'Type a champion…', onChange: c => S.live.on && api('live.update', { champions: c }) });
+  champsLive = chipInput($('#champsLive'), { placeholder: 'Type a champion…', onChange: c => { if (S.live.on) api('live.update', { champions: c }); if (S.team.on) api('team.update', { champions: c }); } });
   $('#liveBtn').onclick = toggleLive;
+  initTeam();
   $('#liveInput').addEventListener('keydown', e => { if (e.key === 'Enter' && !S.live.on) toggleLive(); });
   $('#ovFont').value = st.overlay_font; $('#ovBg').value = Math.round(st.overlay_bg * 100);
   const ovLabels = () => { $('#ovFontV').textContent = $('#ovFont').value + 'px'; $('#ovBgV').textContent = $('#ovBg').value + '%'; }; ovLabels();
@@ -712,7 +716,7 @@ async function toggleLive() {
     if ($('#liveChat').checked) { $('#chatFeed').innerHTML = ''; $('#chatStatus').textContent = 'Connecting to chat…'; }
   } catch (e) { toast(e.message, 'bad'); S.live.starting = false; liveButton(false); }
 }
-function liveButton(on) { const b = $('#liveBtn'); b.classList.toggle('on', on); $('b', b).textContent = on ? 'Stop' : 'Go live'; $('#liveInput').disabled = on; $$('#liveModelSeg button').forEach(x => x.disabled = on); }
+function liveButton(on) { const b = $('#liveBtn'); b.classList.toggle('on', on); $('b', b).textContent = on ? 'Stop' : 'Go live'; $('#liveInput').disabled = on; $$('#liveModelSeg button').forEach(x => x.disabled = on); $$('#liveModeSeg button').forEach(x => x.disabled = on); }
 on('live.status', m => {
   const st = $('#liveState');
   if (m.channel) $('#liveChannel').textContent = m.channel;
@@ -759,6 +763,150 @@ on('live.caption', m => {
 on('live.error', m => {
   toast(m.message, 'bad', 8000);
   if (m.fatal !== false && !S.live.on) { S.live.starting = false; liveButton(false); $('#liveState').textContent = 'Not live'; }
+});
+
+/* ================================================================ TEAM VOICE */
+// Your team's voice call, captioned with each speaker's name: the device the call plays on (recorded in
+// loopback) plus your own mic. Teammates are recognised by voices learned once, before the game.
+S.team = { on: false, starting: false, started: 0, transcript: null, timer: null, learning: false };
+function initTeam() {
+  const st = S.settings;
+  liveModeSeg = seg($('#liveModeSeg'), v => { setSetting('live_mode', v); applyLiveMode(v); });
+  liveModeSeg.set(st.live_mode === 'team' ? 'team' : 'stream'); applyLiveMode(st.live_mode === 'team' ? 'team' : 'stream');
+  $('#teamName').value = st.team_name || '';
+  const saveName = debounce(() => { setSetting('team_name', $('#teamName').value.trim()); renderVoices(S.team.voices || []); if (S.team.on) api('team.update', { my_name: $('#teamName').value.trim() }); }, 350);
+  $('#teamName').oninput = saveName;
+  $('#teamDev').onchange = e => setSetting('team_device', e.target.value);
+  $('#teamMic').onchange = e => { setSetting('team_mic', e.target.value); renderVoices(S.team.voices || []); };
+  $('#teamBtn').onclick = toggleTeam;
+  $('#learnBtn').onclick = () => learnVoice($('#learnName').value);
+  $('#learnName').addEventListener('keydown', e => { if (e.key === 'Enter') learnVoice(e.target.value); });
+  $('#learnCancel').onclick = () => api('team.learn_cancel');
+}
+function applyLiveMode(m) {
+  S.liveMode = m;
+  const team = m === 'team';
+  $$('#page-live .stream-only').forEach(e => e.hidden = team);
+  $$('#page-live .team-only').forEach(e => e.hidden = !team);
+  $('#liveLang').value = team ? (S.settings.team_language ?? 'ar') : (S.settings.live_language || '');
+  $('#liveThumb .thumb-empty').textContent = team ? 'Team call' : 'No stream yet';
+  if (!S.live.on && !S.team.on) {
+    $('#liveChannel').textContent = team ? 'Team voice' : 'Translate anyone, live';
+    $('#liveTitle').textContent = team ? 'Pick the device your team call plays on and your mic, learn your teammates\' voices, then press Start. Each line shows who said it, here, in the floating window and on OBS.'
+      : 'Type a channel and press Go live. Captions show here, in a floating window, or on your own stream through OBS.';
+    $('#liveState').textContent = 'Idle';
+  }
+  if (team) { loadTeamDevices(); loadVoices(); }
+}
+async function loadTeamDevices() {
+  let list = [];
+  try { list = await api('team.devices'); } catch (e) { toast(e.message, 'bad'); }
+  const fill = (sel, groups, saved, fallback) => {
+    sel.innerHTML = ''; sel.append(h('option', { value: '' }, '— none —'));
+    groups.forEach(([label, kind]) => {
+      const devs = list.filter(d => d.kind === kind); if (!devs.length) return;
+      const g = h('optgroup', { label }); devs.forEach(d => g.append(h('option', { value: d.id }, d.name + (d.default ? ' (default)' : '')))); sel.append(g);
+    });
+    const ids = list.map(d => d.id);
+    sel.value = saved && ids.includes(saved) ? saved : (fallback || '');
+  };
+  const defOut = (list.find(d => d.kind === 'output' && d.default) || {}).id, defIn = (list.find(d => d.kind === 'input' && d.default) || {}).id;
+  fill($('#teamDev'), [['Playback (what plays on it)', 'output'], ['Recording (e.g. a virtual cable)', 'input']], S.settings.team_device, defOut);
+  fill($('#teamMic'), [['Microphones', 'input']], S.settings.team_mic, defIn);
+}
+async function loadVoices() { try { renderVoices(await api('team.voices')); } catch { } }
+function renderVoices(list) {
+  S.team.voices = list; const root = $('#voiceList'); root.innerHTML = '';
+  const me = ($('#teamName').value || '').trim() || 'Me';
+  if ($('#teamMic').value) root.append(h('div', { class: 'voice me', style: '--c:#5eead4' }, h('span', { class: 'dot', style: 'background:#5eead4' }), h('b', {}, me), h('span', { class: 'tag' }, 'you · your mic')));
+  if (!list.length) root.append(h('div', { class: 'voice-empty' }, 'No teammates yet. Their lines show as "Teammate" until you learn their voices.'));
+  list.forEach(v => root.append(h('div', { class: 'voice', style: `--c:${v.color}` }, h('span', { class: 'dot', style: `background:${v.color}` }),
+    h('b', { class: 'vname', title: 'Click to rename', onclick: e => renameVoice(e.currentTarget, v.name) }, v.name),
+    h('button', { class: 'btn ghost sm', disabled: S.team.learning, onclick: () => learnVoice(v.name) }, 'Re-learn'),
+    h('button', { class: 'btn ghost sm', title: 'Forget this voice', onclick: async () => { renderVoices(await api('team.forget', { name: v.name })); toast(`Forgot ${v.name}'s voice`, '', 2500); } }, '×'))));
+}
+// click a name to rename it: new lines, the caption window and OBS use the new name
+function renameVoice(el, old) {
+  const input = h('input', { class: 'vname-in', value: old, maxlength: 24, spellcheck: 'false' });
+  let done = false;
+  const finish = async save => {
+    if (done) return; done = true;
+    const to = input.value.trim();
+    if (!save || !to || to === old) { renderVoices(S.team.voices || []); return; }
+    try {
+      renderVoices(await api('team.rename', { name: old, to }));
+      $$('#liveFeed .who').forEach(w => { if (w.textContent === old) w.textContent = to; });
+      const now = $('#nowText .who'); if (now && now.textContent === old) now.textContent = to;
+      toast(`${old} is now ${to}`, 'good', 2500);
+    } catch (e) { toast(e.message, 'bad'); renderVoices(S.team.voices || []); }
+  };
+  input.onkeydown = e => { if (e.key === 'Enter') finish(true); if (e.key === 'Escape') finish(false); };
+  input.onblur = () => finish(true);
+  el.replaceWith(input); input.focus(); input.select();
+}
+async function learnVoice(name) {
+  name = (name || '').trim(); if (!name) { $('#learnName').focus(); return; }
+  if (S.team.learning) return;
+  const device = $('#teamDev').value; if (!device) { toast('Pick the device your team call plays on first.', 'bad'); $('#teamDev').focus(); return; }
+  S.team.learning = true; $('#learnName').value = name; $('#learnBtn').disabled = true; $('#learnProg').hidden = false;
+  $('#learnBar').style.width = '0'; $('#learnText').textContent = `Listening for ${name}…`; renderVoices(S.team.voices || []);
+  try {
+    const list = await api('team.learn', { name, device });
+    renderVoices(list); $('#learnName').value = ''; toast(`Learned ${name}'s voice`, 'good', 3000);
+  } catch (e) { if (!/cancel/i.test(e.message)) toast(e.message, 'bad', 8000); }
+  finally { S.team.learning = false; $('#learnBtn').disabled = false; $('#learnProg').hidden = true; renderVoices(S.team.voices || []); }
+}
+on('team.learn', m => {
+  $('#learnBar').style.width = Math.round(m.f * 100) + '%';
+  $('#learnText').textContent = m.f >= 1 ? 'Got it, saving…' : m.level > 0.25 ? `Hearing ${m.name}… ${Math.round(m.f * 100)}%` : `Waiting for ${m.name} to talk…`;
+  meterLv = Math.max(meterLv, m.level); if (!meterRunning && meterTick && !document.hidden) { meterRunning = true; requestAnimationFrame(meterTick); }
+});
+function teamButton(on) { const b = $('#teamBtn'); b.classList.toggle('on', on); $('b', b).textContent = on ? 'Stop' : 'Start'; ['#teamDev', '#teamMic'].forEach(s => $(s).disabled = on); $$('#liveModeSeg button').forEach(x => x.disabled = on); }
+async function toggleTeam() {
+  if (S.team.on || S.team.starting) { api('team.stop'); return; }
+  const team_device = $('#teamDev').value, mic_device = $('#teamMic').value;
+  if (!team_device && !mic_device) { toast('Pick the device your team call plays on, your microphone, or both.', 'bad'); return; }
+  S.team.starting = true; teamButton(true); $('#liveState').textContent = 'Starting…';
+  try {
+    await api('team.start', { team_device, mic_device, my_name: $('#teamName').value.trim(), language: $('#liveLang').value, use_glossary: $('#liveGloss').checked, champions: champsLive.get() });
+  } catch (e) { toast(e.message, 'bad'); S.team.starting = false; teamButton(false); }
+}
+on('team.status', m => {
+  const st = $('#liveState');
+  if (m.transcript) { S.team.transcript = m.transcript; S.live.transcript = m.transcript; $('#liveOpenTx').disabled = false; }
+  if (m.state === 'live') {
+    if (!S.team.on) {
+      S.team.on = true; S.team.starting = false; S.team.started = Date.now();
+      clearInterval(S.team.timer); S.team.timer = setInterval(() => $('#stUp').textContent = fmt((Date.now() - S.team.started) / 1000), 1000);
+      $('#liveFeed').innerHTML = ''; $('#stLines').textContent = '0'; $('#liveChannel').textContent = 'Team voice'; toast('Team voice: listening', 'good', 2500);
+    }
+    document.body.classList.add('live-on'); teamButton(true);
+    st.textContent = '● Live · listening'; st.style.color = 'var(--live)';
+    if (m.device === 'CPU') toast('Whisper is running on the CPU. Captions will lag a lot.', 'warn', 8000);
+    $('#nowText').className = 'now-text idle'; $('#nowText').textContent = 'Listening for your team…'; $('#nowOrig').textContent = '';
+  } else if (m.state === 'stopped') {
+    const was = S.team.on; S.team.on = false; S.team.starting = false; clearInterval(S.team.timer);
+    document.body.classList.remove('live-on'); teamButton(false);
+    st.textContent = 'Stopped'; st.style.color = '';
+    if (was) toast(`Stopped. ${m.lines || 0} lines saved to the transcript.`, '', 4000);
+  } else { st.textContent = m.message || m.state; st.style.color = ''; }
+});
+on('team.level', m => {
+  meterLv = Math.max(meterLv, m.level);
+  if (!meterRunning && meterTick && !document.hidden) { meterRunning = true; requestAnimationFrame(meterTick); }
+});
+on('team.caption', m => {
+  const t = $('#nowText'); t.className = 'now-text'; void t.offsetWidth; t.classList.add('flash');
+  t.innerHTML = ''; t.append(h('span', { class: 'who', style: `color:${m.color}` }, m.name), m.text); $('#nowOrig').textContent = '';
+  $('#stLines').textContent = m.id; $('#stDelay').textContent = (m.delay + m.took).toFixed(1) + 's'; $('#stLang').textContent = m.lang_name || m.lang;
+  const feed = $('#liveFeed'); const near = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
+  const empty = $('.empty', feed); if (empty) empty.remove();
+  feed.append(h('div', { class: 'line' }, h('span', { class: 'ts' }, m.clock), h('div', { class: 'tx' }, h('span', { class: 'who', style: `color:${m.color}` }, m.name), m.text)));
+  if (near) feed.scrollTop = feed.scrollHeight; else $('#jumpLatest').hidden = false;
+});
+on('team.error', m => {
+  toast(m.message, 'bad', 8000);
+  if (m.fatal !== false && !S.team.on) { S.team.starting = false; teamButton(false); $('#liveState').textContent = 'Not running'; }
 });
 
 /* ================================================================ GLOSSARY */

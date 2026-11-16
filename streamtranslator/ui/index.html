@@ -194,10 +194,20 @@
   <div class="grid-2">
     <div class="col">
       <div class="card live-hero">
-        <div class="bigfield" id="liveField">
+        <div class="live-mode">
+          <div class="seg sm" id="liveModeSeg"><button data-v="stream" class="on">Stream</button><button data-v="team">Team voice</button></div>
+          <span class="muted team-only" hidden>Your team's voice call, captioned live with each speaker's name</span>
+        </div>
+        <div class="bigfield stream-only" id="liveField">
           <i class="ic ic-live"></i>
           <input id="liveInput" placeholder="Channel name or stream link — Twitch, YouTube, Kick…" spellcheck="false" autocomplete="off">
           <button class="btn live" id="liveBtn"><span class="rec"></span><b>Go live</b></button>
+        </div>
+        <div class="team-grid team-only" hidden>
+          <label class="fld"><span>Team call plays on</span><select id="teamDev"></select></label>
+          <label class="fld"><span>My microphone</span><select id="teamMic"></select></label>
+          <label class="fld"><span>My name</span><input id="teamName" placeholder="How you appear on stream" maxlength="24" spellcheck="false" autocomplete="off"></label>
+          <button class="btn live" id="teamBtn"><span class="rec"></span><b>Start</b></button>
         </div>
       </div>
 
@@ -234,7 +244,17 @@
         <button class="jump" id="jumpLatest" hidden>↓ Latest</button>
       </div>
 
-      <div class="card feed-card" id="chatCard">
+      <div class="card feed-card team-only" id="teamCard" hidden>
+        <div class="card-head"><div><h2>Teammates</h2><div class="muted small">Learn each voice once, so every line shows who said it.</div></div></div>
+        <div class="voice-list" id="voiceList"></div>
+        <div class="learn">
+          <div class="learn-row"><input id="learnName" placeholder="Teammate's name" maxlength="24" spellcheck="false" autocomplete="off"><button class="btn primary" id="learnBtn">Learn voice</button></div>
+          <div class="learn-prog" id="learnProg" hidden><div class="bar"><i id="learnBar"></i></div><span id="learnText">Listening…</span><button class="btn ghost sm" id="learnCancel">Cancel</button></div>
+          <p class="muted small learn-tip">Ask one teammate to talk for about 10 seconds while everyone else stays quiet. The app listens on the "Team call" device, so join the call first.</p>
+        </div>
+      </div>
+
+      <div class="card feed-card stream-only" id="chatCard">
         <div class="card-head"><div><h2>Chat</h2><div class="muted small" id="chatStatus">Turn on "Translate chat", then go live on a Twitch channel.</div></div>
           <button class="btn ghost sm" id="chatClear">Clear</button></div>
         <div class="feed chat-feed" id="chatFeed"></div>
@@ -247,16 +267,16 @@
       <div class="card">
         <div class="eyebrow">Translation</div>
         <label class="fld"><span>Spoken language</span><select id="liveLang"></select></label>
-        <div class="fld"><span>Whisper model</span>
+        <div class="fld stream-only"><span>Whisper model</span>
           <div class="seg full" id="liveModelSeg"><button data-v="large-v3" class="on">Best</button><button data-v="large-v3-turbo">Turbo</button><button data-v="medium">Fast</button><button data-v="small">Fastest</button></div>
         </div>
-        <div class="fld"><span>Method</span>
+        <div class="fld stream-only"><span>Method</span>
           <div class="seg full" id="liveMethodSeg"><button data-v="two-step" class="on">Two-step (best)</button><button data-v="whisper">Whisper only</button></div>
         </div>
-        <label class="toggle"><input type="checkbox" id="liveOrig" checked><span class="sw"></span><div><b>Show original language</b><em>Under each English line</em></div></label>
+        <label class="toggle stream-only"><input type="checkbox" id="liveOrig" checked><span class="sw"></span><div><b>Show original language</b><em>Under each English line</em></div></label>
         <label class="toggle"><input type="checkbox" id="liveGloss" checked><span class="sw"></span><div><b>League glossary</b><em>Turn off for non-League streams</em></div></label>
-        <label class="toggle"><input type="checkbox" id="liveIso"><span class="sw"></span><div><b>Isolate voices</b><em>Remove game sound and music · adds ~0.4 s</em></div></label>
-        <label class="toggle"><input type="checkbox" id="liveChat" checked><span class="sw"></span><div><b>Translate chat</b><em>Twitch chat, translated on your GPU</em></div></label>
+        <label class="toggle stream-only"><input type="checkbox" id="liveIso"><span class="sw"></span><div><b>Isolate voices</b><em>Remove game sound and music · adds ~0.4 s</em></div></label>
+        <label class="toggle stream-only"><input type="checkbox" id="liveChat" checked><span class="sw"></span><div><b>Translate chat</b><em>Twitch chat, translated on your GPU</em></div></label>
         <div class="fld"><span>Champions in game <em>optional</em></span><div class="chips-in" id="champsLive"></div></div>
       </div>
       <div class="card">

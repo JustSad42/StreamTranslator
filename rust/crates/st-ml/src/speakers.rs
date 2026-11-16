@@ -161,11 +161,7 @@ fn embed(sess: &mut Session, x: &[f32]) -> Result<Vec<f32>> {
     Ok(e.iter().map(|v| v / norm).collect())
 }
 
-/// Speaker number (0 = talks most) for each (start, end) span in seconds of `audio`.
-pub fn label(audio: &[f32], spans: &[(f64, f64)], progress: &dyn Fn(f64), cancel: &Cancel) -> Result<Vec<usize>> {
-    if spans.is_empty() {
-        return Ok(vec![]);
-    }
+fn session() -> Result<std::sync::MutexGuard<'static, Option<Session>>> {
     let mut guard = SESSION.lock().unwrap();
     if guard.is_none() {
         let env = gpu::ort_env()?;
@@ -173,6 +169,30 @@ pub fn label(audio: &[f32], spans: &[(f64, f64)], progress: &dyn Fn(f64), cancel
         let open = || -> ort::Result<Session> { Session::builder(env)?.with_intra_threads(threads)?.commit_from_file(model_path()) };
         *guard = Some(open()?);
     }
+    Ok(guard)
+}
+
+/// A voice fingerprint (unit vector) of 16 kHz speech; 1 s works, 3–8 s is best. Compare two with
+/// `similarity`: the same person scores well above different people.
+pub fn embedding(audio: &[f32]) -> Result<Vec<f32>> {
+    let mut guard = session()?;
+    embed(guard.as_mut().unwrap(), &audio[..audio.len().min((MAX_LINE * SR as f64) as usize)])
+}
+
+/// Cosine similarity of two fingerprints (1 = identical).
+pub fn similarity(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    dot / (na * nb + 1e-9)
+}
+
+/// Speaker number (0 = talks most) for each (start, end) span in seconds of `audio`.
+pub fn label(audio: &[f32], spans: &[(f64, f64)], progress: &dyn Fn(f64), cancel: &Cancel) -> Result<Vec<usize>> {
+    if spans.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut guard = session()?;
     let sess = guard.as_mut().unwrap();
     let (mut keep, mut embs, mut weights) = (vec![], vec![], vec![]);
     for (i, &(s, e)) in spans.iter().enumerate() {

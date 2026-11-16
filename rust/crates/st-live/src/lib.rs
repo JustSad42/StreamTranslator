@@ -2,7 +2,9 @@
 //! source (obs). The floating caption window is part of the app.
 
 pub mod chat;
+pub mod devices;
 pub mod obs;
 pub mod session;
+pub mod team;
 
 pub use session::{Emit, LiveOptions, LiveSession};

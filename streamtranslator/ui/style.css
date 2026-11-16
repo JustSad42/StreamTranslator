@@ -465,6 +465,31 @@ body.dragging .drop-hint{opacity:1}
 .cue .tm input{width:92px;padding:4px 6px;font-size:12.5px;text-align:center;font-variant-numeric:tabular-nums}
 .cue textarea{min-height:52px;resize:vertical;font-size:14px;padding:7px 9px}
 .cue .del{color:var(--dim);font-size:16px;align-self:start;padding:4px 7px;border-radius:7px}.cue .del:hover{color:var(--bad);background:var(--panel3)}
+/* team voice */
+.live-mode{display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap}
+.live-mode .muted{font-size:13.5px}
+.team-grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1.3fr) minmax(0,1fr) auto;gap:12px;align-items:end}
+.team-grid .fld{margin-bottom:0}
+.team-grid .btn.live{height:41px}
+@media (max-width:1180px){.team-grid{grid-template-columns:1fr 1fr}}
+.voice-list{display:flex;flex-direction:column;gap:8px;margin-bottom:14px;max-height:250px;overflow:auto}
+.voice{display:flex;align-items:center;gap:11px;padding:9px 10px 9px 14px;border-radius:12px;background:rgba(255,255,255,.035);border:1px solid var(--line);animation:lineIn .3s var(--ease)}
+.voice .dot{width:11px;height:11px;border-radius:50%;flex:none;box-shadow:0 0 12px var(--c)}
+.voice b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.voice.me{border-style:dashed}
+.voice .vname{cursor:text;border-radius:6px;padding:2px 4px;margin:-2px -4px;transition:background .2s}
+.voice .vname:hover{background:rgba(255,255,255,.07)}
+.voice .vname-in{flex:1;min-width:0;padding:5px 8px;font-weight:700}
+.voice .tag{font-size:12px;color:var(--dim)}
+.voice-empty{color:var(--dim);font-size:13.5px;padding:6px 2px 2px}
+.learn-row{display:flex;gap:10px}
+.learn-prog{display:flex;align-items:center;gap:12px;margin-top:12px}
+.learn-prog .bar{flex:1;height:8px;border-radius:9px;background:rgba(255,255,255,.08);overflow:hidden}
+.learn-prog .bar i{display:block;height:100%;width:0;background:var(--grad);transition:width .25s var(--ease)}
+.learn-prog span{font-size:13.5px;color:var(--muted);min-width:150px}
+.learn-tip{margin:12px 0 0}
+.line .who{font-weight:800;margin-right:7px}
+.now-text .who{font-weight:800;margin-right:10px}
 .duo{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
 .duo .live-feed,.duo .chat-feed{height:420px}
 @media (max-width:1400px){.duo{grid-template-columns:1fr}}

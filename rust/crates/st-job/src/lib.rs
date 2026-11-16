@@ -33,7 +33,7 @@ pub use engines::Engines;
 /// Whisper's usual hallucinations on music / game noise / silence.
 const JUNK: &[&str] = &[
     "thank you for watching", "thanks for watching", "please subscribe", "like and subscribe",
-    "subtitles by", "amara.org", "subtitled by", "transcribed by", "copyright",
+    "subtitles by", "amara.org", "subscribe for more", "forget to subscribe", "see you in the next video", "subtitled by", "transcribed by", "copyright",
     "시청해주셔서 감사합니다", "구독과 좋아요", "mbc 뉴스", "ご視聴ありがとうございました",
     "字幕", "請不吝點贊", "продолжение следует", "sous-titrage", "untertitel",
 ];

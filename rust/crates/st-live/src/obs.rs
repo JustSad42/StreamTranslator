@@ -21,6 +21,8 @@ html,body{margin:0;background:transparent;overflow:hidden;font-family:'Segoe UI'
  text-shadow:0 0 4px #000,0 0 2px #000,0 2px 3px #000;animation:in .35s cubic-bezier(.2,.8,.2,1);transition:opacity .6s}
 .orig{font-size:calc(var(--size,44px)*.55);font-weight:500;color:#d8d8e4;background:rgba(8,8,12,calc(var(--bg,.55)*.8))}
 .partial{opacity:.65}
+.who{font-weight:800}
+.team{font-size:calc(var(--size,44px)*.8)}
 .gone{opacity:0}
 @keyframes in{from{opacity:0;transform:translateY(12px) scale(.98)}to{opacity:1;transform:none}}
 </style></head><body><div id="wrap"></div>
@@ -32,6 +34,12 @@ if(q.get('bottom'))root.style.setProperty('--bottom',q.get('bottom')+'%');
 const showOrig=q.get('orig')!=='0', wrap=document.getElementById('wrap'); let timer;
 function render(m){
   wrap.innerHTML='';
+  if(m.lines){
+    // team voice: the last few lines, each with its speaker's name in their colour
+    m.lines.forEach(l=>{const d=document.createElement('div');d.className='cap team';const n=document.createElement('span');n.className='who';n.style.color=l.color;n.textContent=l.name+': ';d.appendChild(n);d.appendChild(document.createTextNode(l.text));wrap.appendChild(d)});
+    clearTimeout(timer);timer=setTimeout(()=>wrap.querySelectorAll('.cap').forEach(c=>c.classList.add('gone')),12000);
+    return;
+  }
   if(m.text){const d=document.createElement('div');d.className='cap'+(m.partial?' partial':'');d.textContent=m.text;wrap.appendChild(d)}
   if(showOrig&&m.orig){const o=document.createElement('div');o.className='cap orig';o.textContent=m.orig;wrap.appendChild(o)}
   clearTimeout(timer);timer=setTimeout(()=>wrap.querySelectorAll('.cap').forEach(c=>c.classList.add('gone')),10000);

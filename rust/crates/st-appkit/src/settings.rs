@@ -17,6 +17,7 @@ pub fn defaults() -> Map<String, Value> {
         "method": "two-step", "translator": "better", "auto_details": true, "live_method": "two-step",
         "custom_model": "", "setup_done": false, "app_update": true, "speakers": false,
         "last_version": "", "updated_from": "", "skip_version": "",
+        "live_mode": "stream", "team_device": "", "team_mic": "", "team_name": "", "team_language": "ar",
     });
     v.as_object().unwrap().clone()
 }
