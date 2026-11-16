@@ -65,7 +65,14 @@ pub fn capture(id: &str, mut on_audio: impl FnMut(&[f32]) + Send + 'static, on_e
             on_audio(&out);
         }
     };
-    let err = move |e: cpal::Error| on_error(e.to_string());
+    // Glitches (a buffer under/overrun when the PC is busy, a refused real-time thread, an automatic
+    // reroute) lose at most a few milliseconds and the stream keeps running, so they aren't errors.
+    let err = move |e: cpal::Error| {
+        use cpal::ErrorKind as K;
+        if !matches!(e.kind(), K::Xrun | K::RealtimeDenied | K::DeviceChanged) {
+            on_error(e.to_string());
+        }
+    };
     let stream = match format {
         SampleFormat::F32 => dev.build_input_stream(config, move |d: &[f32], _: &_| feed(&mut d.iter().copied()), err, None)?,
         SampleFormat::I16 => dev.build_input_stream(config, move |d: &[i16], _: &_| feed(&mut d.iter().map(|v| *v as f32 / 32768.0)), err, None)?,
