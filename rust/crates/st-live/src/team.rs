@@ -59,6 +59,9 @@ pub struct Voice {
     pub name: String,
     pub color: String,
     pub emb: Vec<f32>,
+    /// kept out of the caption window, OBS and the subtitles (still in the transcript)
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 fn voices_path() -> PathBuf {
@@ -80,7 +83,7 @@ pub fn save_voices(v: &[Voice]) -> Result<()> {
 
 /// The voices without their fingerprints, for the interface.
 pub fn voices_view(v: &[Voice]) -> Value {
-    json!(v.iter().map(|x| json!({"name": x.name, "color": x.color})).collect::<Vec<_>>())
+    json!(v.iter().map(|x| json!({"name": x.name, "color": x.color, "hidden": x.hidden})).collect::<Vec<_>>())
 }
 
 /// The learned voice that best matches `emb`, if it's close enough.
@@ -98,6 +101,12 @@ pub struct Person {
     #[serde(default)]
     pub name: Option<String>,
     pub color: String,
+    /// kept out of the caption window, OBS and the subtitles (still in the transcript)
+    #[serde(default)]
+    pub hidden: bool,
+    /// their Discord avatar (small)
+    #[serde(default)]
+    pub avatar: Option<String>,
 }
 
 impl Person {
@@ -124,7 +133,7 @@ pub fn save_people(v: &[Person]) -> Result<()> {
 }
 
 pub fn person_view(p: &Person) -> Value {
-    json!({"id": p.id, "name": p.shown(), "discord": p.discord, "renamed": p.name.is_some(), "color": p.color})
+    json!({"id": p.id, "name": p.shown(), "discord": p.discord, "renamed": p.name.is_some(), "color": p.color, "hidden": p.hidden, "avatar": p.avatar})
 }
 
 // ---------------------------------------------------------------- sources
@@ -317,6 +326,17 @@ pub struct TeamOptions {
     pub discord: Option<discord::DiscordTarget>,
 }
 
+/// A captioned line, for the recap and the subtitles file. Times are seconds since the session started.
+#[derive(Clone)]
+struct Rec {
+    start: f64,
+    end: f64,
+    name: String,
+    color: String,
+    text: String,
+    hidden: bool,
+}
+
 /// One sentence waiting to be translated.
 struct Sentence {
     /// 0 = team device, 1 = your mic
@@ -343,6 +363,7 @@ pub struct TeamSession {
     /// Discord mode: everyone seen so far, and who is in this call
     people: Mutex<Vec<Person>>,
     in_call: Mutex<Vec<u64>>,
+    records: Mutex<Vec<Rec>>,
 }
 
 impl TeamSession {
@@ -360,6 +381,7 @@ impl TeamSession {
             last_speaker: Mutex::new(None),
             people: Mutex::new(load_people()),
             in_call: Mutex::new(vec![]),
+            records: Mutex::new(vec![]),
         })
     }
 
@@ -417,15 +439,18 @@ impl TeamSession {
     }
 
     /// A Discord user's display name arrived: remember them (keeping any rename and colour).
-    fn met(&self, user: u64, discord_name: &str) {
+    fn met(&self, user: u64, discord_name: &str, avatar: Option<&str>) {
         {
             let mut people = self.people.lock().unwrap();
             let id = user.to_string();
             match people.iter_mut().find(|p| p.id == id) {
-                Some(p) => p.discord = discord_name.to_string(),
+                Some(p) => {
+                    p.discord = discord_name.to_string();
+                    p.avatar = avatar.map(String::from);
+                }
                 None => {
                     let color = PALETTE[people.len() % PALETTE.len()].to_string();
-                    people.push(Person { id, discord: discord_name.to_string(), name: None, color });
+                    people.push(Person { id, discord: discord_name.to_string(), name: None, color, hidden: false, avatar: avatar.map(String::from) });
                 }
             }
             let _ = save_people(&people);
@@ -467,7 +492,7 @@ impl TeamSession {
                     });
                     sink.lock().unwrap().extend_from_slice(pcm);
                 }),
-                name: Box::new(move |user, name| me2.met(user, name)),
+                name: Box::new(move |user, name, face| me2.met(user, name, face)),
                 problem: Box::new(move |msg, fatal| {
                     me3.emit("team.error", json!({"message": msg, "fatal": fatal}));
                     if fatal {
@@ -520,7 +545,7 @@ impl TeamSession {
                     for (i, f) in files.into_iter().enumerate() {
                         let user = 1000 + i as u64;
                         let audio = st_media::ffmpeg::decode_audio(&f)?;
-                        self.met(user, &f.file_stem().unwrap().to_string_lossy());
+                        self.met(user, &f.file_stem().unwrap().to_string_lossy(), std::env::var("ST_DISCORD_FAKE_AVATAR").ok().as_deref());
                         let sink = Arc::new(Mutex::new(vec![]));
                         let (me, s, tx) = (self.clone(), sink.clone(), tx.clone());
                         std::thread::spawn(move || me.listen(0, Some(user), s, tx));
@@ -586,8 +611,50 @@ impl TeamSession {
             }
         }
         self.stop();
+        let recap = self.recap();
         self.emit("team.status", json!({"state": "stopped", "message": "Stopped.", "lines": self.lines.load(Ordering::SeqCst),
-            "transcript": self.transcript_path.lock().unwrap().as_ref().map(|p| p.to_string_lossy().into_owned())}));
+            "transcript": self.transcript_path.lock().unwrap().as_ref().map(|p| p.to_string_lossy().into_owned()), "recap": recap}));
+    }
+
+    /// After a session: who talked how much, and the lines as a subtitles file (SRT, next to the transcript)
+    /// for captioning the VOD. Hidden people are left out of the subtitles.
+    fn recap(&self) -> Value {
+        let recs = self.records.lock().unwrap().clone();
+        if recs.is_empty() {
+            return Value::Null;
+        }
+        let mut people: Vec<(String, String, usize, f64, bool)> = vec![];
+        for r in &recs {
+            match people.iter_mut().find(|p| p.0 == r.name) {
+                Some(p) => {
+                    p.2 += 1;
+                    p.3 += r.end - r.start;
+                    p.4 |= r.hidden;
+                }
+                None => people.push((r.name.clone(), r.color.clone(), 1, r.end - r.start, r.hidden)),
+            }
+        }
+        people.sort_by(|a, b| b.3.total_cmp(&a.3));
+        let srt = self.transcript_path.lock().unwrap().as_ref().map(|p| {
+            let s = p.to_string_lossy();
+            PathBuf::from(s.strip_suffix(".transcript.txt").map(|x| format!("{x}.srt")).unwrap_or_else(|| format!("{s}.srt")))
+        });
+        let mut shown: Vec<&Rec> = recs.iter().filter(|r| !r.hidden).collect();
+        shown.sort_by(|a, b| a.start.total_cmp(&b.start));
+        let srt = srt.filter(|_| !shown.is_empty()).and_then(|p| {
+            let body: String = shown
+                .iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    // on screen while they talk, and a moment after (at least 1.5 s)
+                    let end = (r.end + 1.0).max(r.start + 1.5);
+                    format!("{}\n{} --> {}\n{}: {}\n\n", i + 1, srt_time(r.start), srt_time(end), r.name, r.text)
+                })
+                .collect();
+            st_core::py::write_text(&p, &body).ok().map(|_| p.to_string_lossy().into_owned())
+        });
+        json!({"duration": (self.started.elapsed().as_secs_f64()).round(), "lines": recs.len(), "srt": srt,
+            "people": people.iter().map(|p| json!({"name": p.0, "color": p.1, "lines": p.2, "talk": (p.3 * 10.0).round() / 10.0, "hidden": p.4})).collect::<Vec<_>>()})
     }
 
     fn open_transcript(&self) -> Result<()> {
@@ -631,6 +698,14 @@ impl TeamSession {
                 }
             }
         }
+    }
+
+    /// Is this line's speaker kept off stream?
+    fn hidden(&self, s: &Sentence, name: &str) -> bool {
+        if let Some(u) = s.user {
+            return self.people.lock().unwrap().iter().any(|p| p.id == u.to_string() && p.hidden);
+        }
+        s.source == 0 && self.opts.lock().unwrap().voices.iter().any(|v| v.name == name && v.hidden)
     }
 
     /// (name, colour) for a sentence.
@@ -713,7 +788,12 @@ impl TeamSession {
         }
         let n = self.lines.fetch_add(1, Ordering::SeqCst) + 1;
         let now = chrono::Local::now();
-        self.emit("team.caption", json!({"id": n, "name": name, "color": color, "text": text, "source": s.source, "lang": lang,
+        let hidden = self.hidden(s, &name);
+        let avatar = s.user.and_then(|u| self.people.lock().unwrap().iter().find(|p| p.id == u.to_string()).and_then(|p| p.avatar.clone()));
+        let secs = s.audio.len() as f64 / SR as f64;
+        let end = s.heard.saturating_duration_since(self.started).as_secs_f64();
+        self.records.lock().unwrap().push(Rec { start: (end - secs).max(0.0), end, name: name.clone(), color: color.clone(), text: text.clone(), hidden });
+        self.emit("team.caption", json!({"id": n, "name": name, "color": color, "text": text, "source": s.source, "lang": lang, "hidden": hidden, "avatar": avatar,
             "lang_name": lang_name(Some(&lang)), "t": (s.t0 * 10.0).round() / 10.0, "clock": now.format("%H:%M:%S").to_string(),
             "delay": (s.heard.elapsed().as_secs_f64() * 10.0).round() / 10.0, "took": (t_proc.elapsed().as_secs_f64() * 100.0).round() / 100.0}));
         if let Some(p) = self.transcript_path.lock().unwrap().as_ref() {
@@ -762,6 +842,12 @@ mod tests {
         assert_eq!(collapse_repeats("we are going to win we are going to win we are going to win"), "we are going to win");
         assert_eq!(collapse_repeats("Flash is down on their ADC, go now."), "Flash is down on their ADC, go now.");
     }
+}
+
+/// 00:01:02,345
+fn srt_time(t: f64) -> String {
+    let ms = (t.max(0.0) * 1000.0).round() as u64;
+    format!("{:02}:{:02}:{:02},{:03}", ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60, ms % 1000)
 }
 
 /// Append with Windows line endings (like the live transcript).

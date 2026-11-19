@@ -13,7 +13,7 @@ use serde_json::Value;
 
 /// The page. Its look comes from the app (a {"style": ...} event), so changes show at once in OBS;
 /// ?demo shows sample lines (the preview in the app).
-pub const OBS_PAGE: &str = r#"<!doctype html><html><head><meta charset="utf-8"><title>StreamTranslator captions</title>
+pub const OBS_PAGE: &str = r##"<!doctype html><html><head><meta charset="utf-8"><title>StreamTranslator captions</title>
 <style>
 :root{--size:42px;--bg:.6;--pos:7%;--width:80%;--font:'Segoe UI',system-ui,sans-serif;--stroke:.09em;--lh:1.25}
 html,body{margin:0;background:transparent;overflow:hidden}
@@ -24,7 +24,7 @@ body.left #wrap{align-items:flex-start}
  padding:.22em .62em .26em;border-radius:.38em;background:rgba(10,10,16,var(--bg));
  -webkit-text-stroke:var(--stroke) rgba(0,0,0,.85);paint-order:stroke fill;
  text-shadow:0 .04em .12em rgba(0,0,0,.9),0 0 .3em rgba(0,0,0,.45);
- animation:in .38s cubic-bezier(.2,.8,.2,1) both;transition:opacity .7s ease,transform .7s ease;overflow-wrap:anywhere}
+ animation:in .38s cubic-bezier(.2,.8,.2,1) backwards;transition:opacity .7s ease,transform .7s ease;overflow-wrap:anywhere}
 body.left .cap{text-align:left}
 body.nostroke .cap{-webkit-text-stroke:0}
 body.box .cap{backdrop-filter:blur(6px)}
@@ -32,42 +32,66 @@ body.box .cap{backdrop-filter:blur(6px)}
 .partial{opacity:.65}
 .team{font-size:var(--size)}
 .who{font-weight:800;margin-right:.18em}
+.av{width:1.1em;height:1.1em;border-radius:50%;object-fit:cover;vertical-align:-.18em;margin-right:.28em;box-shadow:0 0 0 .05em rgba(0,0,0,.7),0 .04em .14em rgba(0,0,0,.6)}
+body.noav .av{display:none}
+.cont{padding-top:.12em}
 body.names-white .who{color:#fff!important}
 body.names-off .who{display:none}
 body.names-above .cap.team{display:flex;flex-direction:column;align-items:center;gap:.06em}
 body.names-above.left .cap.team{align-items:flex-start}
-body.names-above .who{font-size:.68em;letter-spacing:.04em;text-transform:uppercase;margin:0;-webkit-text-stroke:calc(var(--stroke)*.8) rgba(0,0,0,.85)}
+body.names-above .who{font-size:.68em;letter-spacing:.04em;text-transform:uppercase;margin:0;-webkit-text-stroke:calc(var(--stroke)*.8) rgba(0,0,0,.85);display:inline-flex;align-items:center}
+body.names-above .av{width:1.5em;height:1.5em;vertical-align:0}
 .old{opacity:.72}
 .gone{opacity:0;transform:translateY(6px)}
 @keyframes in{from{opacity:0;transform:translateY(14px) scale(.97)}to{opacity:1;transform:none}}
 </style></head><body><div id="wrap"></div>
 <script>
 const q=new URLSearchParams(location.search), root=document.documentElement, wrap=document.getElementById('wrap');
-const S={size:42,bg:.6,pos:7,place:'bottom',align:'center',lines:3,hide:12,names:'color',stroke:true,width:80,font:'Segoe UI',orig:true,fade:true};
+const S={size:42,bg:.6,pos:7,place:'bottom',align:'center',lines:3,hide:12,names:'color',stroke:true,width:80,font:'Segoe UI',orig:true,fade:true,avatars:true,split:true};
 // old links: ?size=56&bg=0.4&bottom=10&orig=0
 if(q.get('size'))S.size=+q.get('size'); if(q.get('bg'))S.bg=+q.get('bg'); if(q.get('bottom'))S.pos=+q.get('bottom'); if(q.get('orig')==='0')S.orig=false;
 let last=null, timer;
-const DEMO={lines:[{name:'Ahmed',color:'#ffd166',text:'Flash is down on their ADC, go now!'},{name:'Omar',color:'#ff7aa8',text:'I have ultimate, I can engage on the jungler.'},{name:'Revenger',color:'#7cc4ff',text:"Wait for me, I'm coming from top side."}]};
+const face=(c,l)=>'data:image/svg+xml,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="32" fill="${c}"/><text x="32" y="43" font-size="30" text-anchor="middle" font-family="Segoe UI,sans-serif" font-weight="800" fill="#16161e">${l}</text></svg>`);
+const DEMO={lines:[{name:'Ahmed',color:'#ffd166',avatar:face('#ffd166','A'),text:'Flash is down on their ADC, go now!'},{name:'Omar',color:'#ff7aa8',avatar:face('#ff7aa8','O'),text:'I have ultimate, I can engage on the jungler, so wait for my call and then everyone follow up behind me.'},{name:'Revenger',color:'#7cc4ff',avatar:face('#7cc4ff','R'),text:"Wait for me, I'm coming from top side."}]};
+// a long line reads badly at stream size: cut it at a sentence end, a comma, or a space near the middle
+const MAXC=68;
+function chunks(t){
+  if(!S.split||t.length<=MAXC)return [t];
+  const mid=t.length/2;let best=-1,score=1e9;
+  for(let i=Math.floor(t.length*.3);i<t.length*.72;i++){const c=t[i];if(c!==' ')continue;const p=t[i-1];
+    const w=/[.!?]/.test(p)?0:/[,;:]/.test(p)?.18:.45;const sc=Math.abs(i-mid)/t.length+w;if(sc<score){score=sc;best=i}}
+  if(best<0)return [t];
+  return [...chunks(t.slice(0,best).trim()),...chunks(t.slice(best+1).trim())];
+}
 function applyStyle(){
   root.style.setProperty('--size',S.size+'px'); root.style.setProperty('--bg',S.bg); root.style.setProperty('--pos',S.pos+'%');
   root.style.setProperty('--width',S.width+'%'); root.style.setProperty('--font',`'${S.font}','Segoe UI',system-ui,sans-serif`);
-  document.body.className=[S.place==='top'?'top':'',S.align==='left'?'left':'',S.stroke?'':'nostroke','names-'+S.names].join(' ');
+  document.body.className=[S.place==='top'?'top':'',S.align==='left'?'left':'',S.stroke?'':'nostroke','names-'+S.names,S.avatars===false?'noav':''].join(' ');
 }
 function render(m){
   wrap.innerHTML=''; clearTimeout(timer);
   if(!m)return;
+  // captions sent earlier (a style change, OBS reconnecting) keep their original hide time
+  const demo=q.has('demo'), left=S.hide>0?S.hide*1000-(m.at?Date.now()-m.at:0):1;
+  if(!demo&&left<=0)return;
   if(m.lines){
     const lines=m.lines.slice(-Math.max(1,S.lines));
     const list=S.place==='top'?lines.slice().reverse():lines;
-    list.forEach((l,i)=>{const d=document.createElement('div');d.className='cap team';
-      const newest=S.place==='top'?i===0:i===list.length-1; if(S.fade&&!newest&&list.length>1)d.classList.add('old');
-      const n=document.createElement('span');n.className='who';n.style.color=l.color;n.textContent=S.names==='above'?l.name:l.name+':';
-      const t=document.createElement('span');t.textContent=l.text;d.append(n,t);wrap.appendChild(d)});
+    list.forEach((l,i)=>{
+      const newest=S.place==='top'?i===0:i===list.length-1;
+      chunks(l.text||'').forEach((part,k)=>{
+        const d=document.createElement('div');d.className='cap team'+(k?' cont':'');
+        if(S.fade&&!newest&&list.length>1)d.classList.add('old');
+        if(!k){const n=document.createElement('span');n.className='who';n.style.color=l.color;
+          if(l.avatar){const a=document.createElement('img');a.className='av';a.src=l.avatar;a.alt='';a.onerror=()=>a.remove();n.appendChild(a)}
+          n.appendChild(document.createTextNode(S.names==='above'?l.name:l.name+':'));d.appendChild(n)}
+        const t=document.createElement('span');t.textContent=part;d.appendChild(t);wrap.appendChild(d)});
+    });
   }else{
     if(m.text){const d=document.createElement('div');d.className='cap'+(m.partial?' partial':'');d.textContent=m.text;wrap.appendChild(d)}
     if(S.orig&&m.orig){const o=document.createElement('div');o.className='cap orig';o.textContent=m.orig;wrap.appendChild(o)}
   }
-  if(S.hide>0&&!q.has('demo'))timer=setTimeout(()=>wrap.querySelectorAll('.cap').forEach(c=>c.classList.add('gone')),S.hide*1000);
+  if(S.hide>0&&!demo)timer=setTimeout(()=>wrap.querySelectorAll('.cap').forEach(c=>c.classList.add('gone')),left);
 }
 function onMsg(m){
   if(m.style){Object.assign(S,m.style);applyStyle();render(q.has('demo')?DEMO:last);return}
@@ -77,7 +101,7 @@ applyStyle();
 if(q.has('demo'))render(DEMO);
 function connect(){const es=new EventSource('/events');es.onmessage=e=>onMsg(JSON.parse(e.data));es.onerror=()=>{es.close();setTimeout(connect,2000)}}
 connect();
-</script></body></html>"#;
+</script></body></html>"##;
 
 #[derive(Default)]
 struct Shared {
@@ -130,6 +154,11 @@ impl ObsServer {
 
     /// {text, orig, partial} to every open browser source.
     pub fn send(&self, msg: &Value) {
+        let mut msg = msg.clone();
+        if let Some(o) = msg.as_object_mut() {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+            o.insert("at".into(), now.into());
+        }
         let data = msg.to_string();
         let mut sh = self.shared.lock().unwrap();
         sh.last = Some(data.clone());

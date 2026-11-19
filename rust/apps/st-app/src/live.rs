@@ -266,11 +266,11 @@ impl Backend {
     fn team_event(&self, team: Option<&TeamSession>, kind: &str, data: Value) {
         let stopped = kind == "team.status" && data["state"] == "stopped";
         let fatal_error = (kind == "team.error" && data.get("fatal") != Some(&json!(false))).then(|| s(&data, "message"));
-        if kind == "team.caption" {
+        if kind == "team.caption" && data["hidden"] != json!(true) {
             // the caption window and OBS show the last few lines, each with its speaker
             let lines = {
                 let mut r = self.team_recent.lock().unwrap();
-                r.push(json!({"id": data["id"], "name": data["name"], "color": data["color"], "text": data["text"]}));
+                r.push(json!({"id": data["id"], "name": data["name"], "color": data["color"], "text": data["text"], "avatar": data["avatar"]}));
                 let extra = r.len().saturating_sub(6);
                 r.drain(..extra);
                 r.clone()
@@ -336,7 +336,7 @@ impl Backend {
             None => team::PALETTE.iter().find(|c| !voices.iter().any(|v| v.color == **c)).unwrap_or(&team::PALETTE[voices.len() % team::PALETTE.len()]).to_string(),
         };
         voices.retain(|v| !v.name.eq_ignore_ascii_case(&name));
-        voices.push(Voice { name, color, emb });
+        voices.push(Voice { name, color, emb, hidden: false });
         team::save_voices(&voices)?;
         if let Some(t) = self.team.lock().unwrap().as_ref() {
             t.set_voices(voices.clone());
@@ -412,6 +412,69 @@ impl Backend {
         }
         self.relabel_recent(&old, &new);
         Ok(team::person_view(&people[i]))
+    }
+
+    /// Keep someone off stream (caption window, OBS, subtitles), or show them again. `id`: a Discord
+    /// person; `name`: a learned voice. Their lines already on screen go at once.
+    pub(super) fn team_hide(&self, p: &Value) -> Result<Value> {
+        let hidden = b(p, "hidden", true);
+        let (id, name) = (s(p, "id"), s(p, "name"));
+        let (shown_name, view) = if !id.is_empty() {
+            let mut people = team::load_people();
+            let Some(x) = people.iter_mut().find(|x| x.id == id) else { return Err(st_core::JobError("That person isn't known yet.".into()).into()) };
+            x.hidden = hidden;
+            let (n, v) = (x.shown().to_string(), team::person_view(x));
+            team::save_people(&people)?;
+            if let Some(t) = self.team.lock().unwrap().as_ref() {
+                t.set_people(people.clone());
+            }
+            (n, v)
+        } else {
+            let mut voices = team::load_voices();
+            for v in voices.iter_mut().filter(|v| v.name == name) {
+                v.hidden = hidden;
+            }
+            team::save_voices(&voices)?;
+            if let Some(t) = self.team.lock().unwrap().as_ref() {
+                t.set_voices(voices.clone());
+            }
+            (name.clone(), team::voices_view(&voices))
+        };
+        if hidden {
+            let lines = {
+                let mut r = self.team_recent.lock().unwrap();
+                r.retain(|l| l["name"] != json!(shown_name));
+                r.clone()
+            };
+            let c = json!({"text": lines.last().map(|l| l["text"].clone()).unwrap_or(json!("")), "orig": "", "partial": false, "lines": lines});
+            if self.app.get_webview_window("overlay").is_some_and(|w| w.is_visible().unwrap_or(false)) {
+                let _ = self.app.emit("overlay-caption", c.clone());
+            }
+            if let Some(obs) = self.obs.lock().unwrap().as_ref() {
+                obs.send(&c);
+            }
+        }
+        Ok(view)
+    }
+
+    /// A word Whisper keeps getting wrong, fixed from a caption: added to the glossary's fixes (and the
+    /// right spelling to its custom words, so Whisper hears it as a hint too).
+    pub(super) fn glossary_add_fix(&self, wrong: &str, right: &str) -> Result<Value> {
+        let (wrong, right) = (wrong.trim(), right.trim());
+        if wrong.is_empty() || right.is_empty() || wrong == right {
+            return Err(st_core::JobError("Type what it should say.".into()).into());
+        }
+        let mut g = self.glossary.lock().unwrap();
+        g.fixes.retain(|(k, _)| !k.eq_ignore_ascii_case(wrong));
+        g.fixes.push((wrong.to_string(), right.to_string()));
+        if right.split_whitespace().count() <= 3 && !g.custom_words.iter().any(|w| w.eq_ignore_ascii_case(right)) {
+            g.custom_words.push(right.to_string());
+        }
+        g.save()?;
+        let sum = g.summary();
+        drop(g);
+        self.emit("glossary.updated", json!({"glossary": sum.clone()}));
+        Ok(sum)
     }
 
     /// The caption look in OBS: saved, and sent to open browser sources at once.

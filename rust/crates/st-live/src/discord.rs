@@ -48,7 +48,8 @@ pub struct DiscordTarget {
 /// `problem(message, fatal)` when something goes wrong.
 pub struct Callbacks {
     pub audio: Box<dyn Fn(u64, &[f32]) + Send + Sync>,
-    pub name: Box<dyn Fn(u64, &str) + Send + Sync>,
+    /// (user, display name, small avatar URL)
+    pub name: Box<dyn Fn(u64, &str, Option<&str>) + Send + Sync>,
     pub problem: Box<dyn Fn(&str, bool) + Send + Sync>,
     pub joined: Box<dyn Fn(&str) + Send + Sync>,
 }
@@ -135,15 +136,20 @@ impl Receiver {
         self.named.lock().unwrap().insert(user, String::new());
         let me = self.clone();
         tokio::spawn(async move {
-            let name = match me.guild.member(&me.http, UserId::new(user)).await {
-                Ok(m) => m.display_name().to_string(),
+            let (name, face) = match me.guild.member(&me.http, UserId::new(user)).await {
+                Ok(m) => (m.display_name().to_string(), Some(m.face())),
                 Err(_) => match me.http.get_user(UserId::new(user)).await {
-                    Ok(u) => u.global_name.clone().unwrap_or(u.name),
-                    Err(_) => format!("User {}", user % 10000),
+                    Ok(u) => (u.global_name.clone().unwrap_or(u.name.clone()), Some(u.face())),
+                    Err(_) => (format!("User {}", user % 10000), None),
                 },
             };
+            // a small one is plenty next to a name
+            let face = face.map(|f| match f.split_once('?') {
+                Some((base, _)) => format!("{base}?size=64"),
+                None => format!("{f}?size=64"),
+            });
             me.named.lock().unwrap().insert(user, name.clone());
-            (me.cb.name)(user, &name);
+            (me.cb.name)(user, &name, face.as_deref());
         });
     }
 }
@@ -210,16 +216,29 @@ impl EventHandler for Handler {
             call.add_global_event(CoreEvent::VoiceTick.into(), rx.clone());
             call.add_global_event(CoreEvent::DriverDisconnect.into(), rx.clone());
         }
-        match manager.join(guild, ChannelId::new(self.target.channel)).await {
-            Ok(_) => {
-                let channel = ChannelId::new(self.target.channel).name(&ctx.http).await.unwrap_or_else(|_| "the voice channel".into());
-                (self.cb.joined)(&channel);
+        // Still in the call from last time (the app was closed suddenly)? Discord doesn't answer a join to the
+        // channel it thinks the bot is already in, so leave first, then join; retry a couple of times.
+        let channel = ChannelId::new(self.target.channel);
+        let mut last_err = String::new();
+        for attempt in 0..3 {
+            if let Some(call) = manager.get(guild) {
+                let _ = call.lock().await.leave().await;
             }
-            Err(e) => (self.cb.problem)(
-                &format!("The bot couldn't join the voice channel ({e}). Check that it's in the server and has the Connect permission there."),
-                true,
-            ),
+            tokio::time::sleep(Duration::from_millis(if attempt == 0 { 300 } else { 1500 })).await;
+            match tokio::time::timeout(Duration::from_secs(12), manager.join(guild, channel)).await {
+                Ok(Ok(_)) => {
+                    let name = channel.name(&ctx.http).await.unwrap_or_else(|_| "the voice channel".into());
+                    (self.cb.joined)(&name);
+                    return;
+                }
+                Ok(Err(e)) => last_err = e.to_string(),
+                Err(_) => last_err = "Discord didn't answer".into(),
+            }
         }
+        (self.cb.problem)(
+            &format!("The bot couldn't join the voice channel ({last_err}). Check that it's in the server and has the Connect permission there."),
+            true,
+        );
     }
 }
 
@@ -261,6 +280,8 @@ impl DiscordCall {
                 }
                 if let Some(v) = voice {
                     let _ = v.remove(guild).await;
+                    // let the "leave" reach Discord before the connection closes, or the bot lingers in the call
+                    tokio::time::sleep(Duration::from_millis(600)).await;
                 }
                 shards.shutdown_all().await;
             });

@@ -210,7 +210,7 @@
         <div class="team-grid team-only" hidden>
           <label class="fld src-device"><span>Team call plays on</span><select id="teamDev"></select></label>
           <label class="fld src-device"><span>My microphone</span><select id="teamMic"></select></label>
-          <label class="fld src-discord wide" hidden><span>Voice channel</span><select id="dcChan"><option value="">Connect the bot first →</option></select></label>
+          <label class="fld src-discord wide" hidden><span>Voice channel <button type="button" class="linkish" id="dcPasteBtn">Paste a channel link</button></span><select id="dcChan"><option value="">Connect the bot first →</option></select></label>
           <label class="fld"><span>My name</span><input id="teamName" placeholder="How you appear on stream" maxlength="24" spellcheck="false" autocomplete="off"></label>
           <button class="btn live" id="teamBtn"><span class="rec"></span><b>Start</b></button>
         </div>
@@ -325,6 +325,8 @@
           <label class="fld"><span>Font</span><select id="osFont"><option>Segoe UI</option><option>Bahnschrift</option><option>Arial Black</option><option>Verdana</option><option>Trebuchet MS</option><option>Calibri</option></select></label>
           <label class="toggle"><input type="checkbox" id="osStroke"><span class="sw"></span><div><b>Text outline</b><em>Readable over bright game scenes</em></div></label>
           <label class="toggle"><input type="checkbox" id="osFade"><span class="sw"></span><div><b>Dim older lines</b><em>The newest line stands out</em></div></label>
+          <label class="toggle"><input type="checkbox" id="osAvatars"><span class="sw"></span><div><b>Discord avatars</b><em>Next to each name</em></div></label>
+          <label class="toggle"><input type="checkbox" id="osSplit"><span class="sw"></span><div><b>Split long lines</b><em>Cut at a pause or comma, so each line stays short</em></div></label>
           <label class="toggle"><input type="checkbox" id="osOrig"><span class="sw"></span><div><b>Original language</b><em>Stream mode: under each English line</em></div></label>
           <button class="btn ghost sm" id="osReset">Reset to default</button>
         </details>
@@ -490,6 +492,24 @@
       <div class="row"><button class="btn ghost" id="newsBack" hidden>Go back to the old version</button><button class="btn primary" id="newsClose">Got it</button></div>
     </div>
     <div class="news-notes" id="newsNotes"></div>
+  </div>
+</div>
+
+<div class="modal" id="recap" hidden>
+  <div class="ed setup-box recap-box">
+    <div class="ed-head">
+      <div><div class="eyebrow">Team voice</div><h3>Session recap</h3><div class="muted small" id="recapSub"></div></div>
+      <button class="btn primary" id="recapClose">Done</button>
+    </div>
+    <div class="recap-body">
+      <div class="stats" id="recapStats"></div>
+      <div class="eyebrow">Who talked</div>
+      <div class="recap-people" id="recapPeople"></div>
+      <div class="recap-files">
+        <div><b>Subtitles for the VOD</b><em id="recapSrtNote">An .srt file with every line, timed to the session, named by speaker.</em></div>
+        <div class="row"><button class="btn ghost sm" id="recapTx">Open transcript</button><button class="btn primary sm" id="recapSrt">Show subtitles file</button></div>
+      </div>
+    </div>
   </div>
 </div>
 

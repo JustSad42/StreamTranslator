@@ -370,6 +370,8 @@ impl Backend {
             "team.learn_cancel" => self.team_learn_cancel(),
             "team.forget" => self.team_forget(&s(p, "name"))?,
             "team.rename" => self.team_rename(&s(p, "name"), &s(p, "to"))?,
+            "team.hide" => self.team_hide(p)?,
+            "glossary.add_fix" => self.glossary_add_fix(&s(p, "wrong"), &s(p, "right"))?,
             "team.rename_person" => self.team_rename_person(&s(p, "id"), &s(p, "to"))?,
             "team.discord_channels" => st_live::discord::channels(&s(p, "token")).map_err(|e| st_core::JobError(e.to_string()))?,
             "obs.style" => self.obs_style(&p["style"])?,

@@ -769,7 +769,7 @@ on('live.error', m => {
 /* ================================================================ OBS CAPTION STYLE */
 // Saved in settings (obs_style) and pushed to every open OBS browser source at once; the preview is the
 // real OBS page in demo mode, scaled down.
-const OBS_DEFAULT = { size: 42, bg: 0.6, pos: 7, place: 'bottom', align: 'center', lines: 3, hide: 12, names: 'color', stroke: true, width: 80, font: 'Segoe UI', orig: true, fade: true };
+const OBS_DEFAULT = { size: 42, bg: 0.6, pos: 7, place: 'bottom', align: 'center', lines: 3, hide: 12, names: 'color', stroke: true, width: 80, font: 'Segoe UI', orig: true, fade: true, avatars: true, split: true };
 function initObsStyle() {
   S.obsStyle = { ...OBS_DEFAULT, ...(S.settings.obs_style || {}) };
   const push = debounce(() => { S.settings.obs_style = { ...S.obsStyle }; api('obs.style', { style: S.obsStyle }).catch(e => toast(e.message, 'bad')); }, 120);
@@ -780,7 +780,7 @@ function initObsStyle() {
   const segs = {};
   [['#osPlace', 'place', String], ['#osAlign', 'align', String], ['#osLines', 'lines', Number], ['#osHide', 'hide', Number], ['#osNames', 'names', String]].forEach(([id, k, f]) => { segs[k] = seg($(id), v => set(k, f(v))); });
   $('#osFont').onchange = e => set('font', e.target.value);
-  const toggles = [['#osStroke', 'stroke'], ['#osFade', 'fade'], ['#osOrig', 'orig']];
+  const toggles = [['#osStroke', 'stroke'], ['#osFade', 'fade'], ['#osOrig', 'orig'], ['#osAvatars', 'avatars'], ['#osSplit', 'split']];
   toggles.forEach(([id, k]) => { $(id).onchange = e => set(k, e.target.checked); });
   const sync = () => {
     const o = S.obsStyle;
@@ -817,9 +817,10 @@ function initTeam() {
   $('#learnBtn').onclick = () => learnVoice($('#learnName').value);
   $('#learnName').addEventListener('keydown', e => { if (e.key === 'Enter') learnVoice(e.target.value); });
   $('#learnCancel').onclick = () => api('team.learn_cancel');
+  $('#dcToken').value = st.discord_token || '';
   const src = seg($('#teamSrcSeg'), v => { setSetting('team_source', v); applyTeamSource(v); });
   S.team.source = st.team_source === 'discord' ? 'discord' : 'device'; src.set(S.team.source); applyTeamSource(S.team.source);
-  $('#dcToken').value = st.discord_token || '';
+  $('#dcPasteBtn').onclick = pasteChannel;
   $('#dcConnect').onclick = () => discordConnect(true);
   $('#dcToken').addEventListener('keydown', e => { if (e.key === 'Enter') discordConnect(true); });
   $('#dcChan').onchange = e => { const [g, c] = (e.target.value || '|').split('|'); setSetting('discord_guild', g); setSetting('discord_channel', c); };
@@ -832,6 +833,16 @@ function applyTeamSource(v) {
   $$('#page-live .src-device').forEach(e => e.hidden = dc);
   if (dc && !S.team.dcLoaded && S.settings.discord_token) discordConnect(false);
 }
+// a voice channel that isn't in the list: right-click it in Discord → Copy Link (or two IDs)
+async function pasteChannel() {
+  let text = '';
+  try { text = await api('os.clipboard'); } catch { }
+  const m = (text || '').match(/channels\/(\d{15,22})\/(\d{15,22})/) || (text || '').match(/(\d{15,22})\D+(\d{15,22})/);
+  if (!m) { toast('Copy the channel link first: in Discord, right-click the voice channel → Copy Link. Then press this again.', 'warn', 9000); return; }
+  const v = `${m[1]}|${m[2]}`, sel = $('#dcChan');
+  if (!$$('option', sel).some(o => o.value === v)) { sel.querySelector('option[value=""]')?.remove(); sel.append(h('option', { value: v }, '🔊 Pasted channel')); }
+  sel.value = v; sel.onchange({ target: sel }); toast('Channel set', 'good', 2000);
+}
 async function discordConnect(user) {
   const token = $('#dcToken').value.trim();
   if (!token) { if (user) { toast('Paste the bot token first.', 'bad'); $('#dcToken').focus(); } return; }
@@ -843,7 +854,8 @@ async function discordConnect(user) {
     const sel = $('#dcChan'); sel.innerHTML = '';
     const saved = `${S.settings.discord_guild}|${S.settings.discord_channel}`;
     let count = 0;
-    r.servers.forEach(sv => { if (!sv.channels.length) return; const g = h('optgroup', { label: sv.name }); sv.channels.forEach(c => { g.append(h('option', { value: `${sv.id}|${c.id}` }, '🔊 ' + c.name)); count++; }); sel.append(g); });
+    r.servers.forEach(sv => { if (!sv.channels.length) return; const g = h('optgroup', { label: `${sv.name} · ${sv.channels.length} voice channel${sv.channels.length === 1 ? '' : 's'}` }); sv.channels.forEach(c => { g.append(h('option', { value: `${sv.id}|${c.id}` }, '🔊 ' + c.name)); count++; }); sel.append(g); });
+    if (saved !== '|' && saved.split('|').every(Boolean) && !$$('option', sel).some(o => o.value === saved)) sel.append(h('option', { value: saved }, '🔊 Pasted channel'));
     if (!count) sel.append(h('option', { value: '' }, r.servers.length ? 'No voice channels the bot can see' : 'Invite the bot to your server first'));
     const vals = $$('option', sel).map(o => o.value);
     sel.value = vals.includes(saved) ? saved : (vals[0] || '');
@@ -860,11 +872,23 @@ S.team.people = []; S.team.talking = {};
 function renderPeople() {
   const root = $('#peopleList'); root.innerHTML = '';
   if (!S.team.people.length) { root.append(h('div', { class: 'voice-empty' }, S.team.on ? 'Waiting for someone to talk…' : 'People show up here when they talk. Click a name to change how it appears on stream.')); return; }
-  S.team.people.forEach(p => root.append(h('div', { class: 'voice', 'data-id': p.id, style: `--c:${p.color}` }, h('span', { class: 'dot', style: `background:${p.color}` }),
+  S.team.people.forEach(p => root.append(h('div', { class: 'voice' + (p.hidden ? ' off' : ''), 'data-id': p.id, style: `--c:${p.color}` },
+    p.avatar ? h('img', { class: 'av', src: p.avatar, alt: '', onerror: e => e.target.replaceWith(h('span', { class: 'dot', style: `background:${p.color}` })) }) : h('span', { class: 'dot', style: `background:${p.color}` }),
     h('b', { class: 'vname', title: 'Click to rename', onclick: e => renamePerson(e.currentTarget, p) }, p.name),
     p.renamed ? h('span', { class: 'sub', title: 'Discord name' }, '@' + p.discord) : '',
     p.renamed ? h('button', { class: 'btn ghost sm', title: 'Use their Discord name again', onclick: () => renamePerson(null, p, '') }, '↺') : '',
+    p.hidden ? h('span', { class: 'tag off-tag' }, 'hidden') : '',
+    h('button', { class: 'btn ghost sm eye', title: p.hidden ? 'Show on stream again' : 'Hide from stream (still saved in the transcript)', onclick: () => hidePerson({ id: p.id }, !p.hidden) }, p.hidden ? 'Show' : 'Hide'),
     h('span', { class: 'talk' }))));
+}
+async function hidePerson(who, hidden) {
+  try {
+    const v = await api('team.hide', { ...who, hidden });
+    if (who.id) { S.team.people = S.team.people.map(x => x.id === who.id ? v : x); renderPeople(); }
+    else renderVoices(v);
+    const name = who.id ? v.name : who.name;
+    toast(hidden ? `${name} is hidden from stream` : `${name} shows on stream again`, '', 2500);
+  } catch (e) { toast(e.message, 'bad'); }
 }
 async function renamePerson(el, p, direct) {
   const apply = async to => {
@@ -925,8 +949,10 @@ function renderVoices(list) {
   const me = ($('#teamName').value || '').trim() || 'Me';
   if ($('#teamMic').value) root.append(h('div', { class: 'voice me', style: '--c:#5eead4' }, h('span', { class: 'dot', style: 'background:#5eead4' }), h('b', {}, me), h('span', { class: 'tag' }, 'you · your mic')));
   if (!list.length) root.append(h('div', { class: 'voice-empty' }, 'No teammates yet. Their lines show as "Teammate" until you learn their voices.'));
-  list.forEach(v => root.append(h('div', { class: 'voice', style: `--c:${v.color}` }, h('span', { class: 'dot', style: `background:${v.color}` }),
+  list.forEach(v => root.append(h('div', { class: 'voice' + (v.hidden ? ' off' : ''), style: `--c:${v.color}` }, h('span', { class: 'dot', style: `background:${v.color}` }),
     h('b', { class: 'vname', title: 'Click to rename', onclick: e => renameVoice(e.currentTarget, v.name) }, v.name),
+    v.hidden ? h('span', { class: 'tag off-tag' }, 'hidden') : '',
+    h('button', { class: 'btn ghost sm eye', title: v.hidden ? 'Show on stream again' : 'Hide from stream (still saved in the transcript)', onclick: () => hidePerson({ name: v.name }, !v.hidden) }, v.hidden ? 'Show' : 'Hide'),
     h('button', { class: 'btn ghost sm', disabled: S.team.learning, onclick: () => learnVoice(v.name) }, 'Re-learn'),
     h('button', { class: 'btn ghost sm', title: 'Forget this voice', onclick: async () => { renderVoices(await api('team.forget', { name: v.name })); toast(`Forgot ${v.name}'s voice`, '', 2500); } }, '×'))));
 }
@@ -997,7 +1023,8 @@ on('team.status', m => {
     const was = S.team.on; S.team.on = false; S.team.starting = false; clearInterval(S.team.timer);
     document.body.classList.remove('live-on'); teamButton(false);
     st.textContent = 'Stopped'; st.style.color = '';
-    if (was) toast(`Stopped. ${m.lines || 0} lines saved to the transcript.`, '', 4000);
+    if (was && m.recap) showRecap(m.recap, m.transcript || S.team.transcript);
+    else if (was) toast(`Stopped. ${m.lines || 0} lines saved to the transcript.`, '', 4000);
   } else { st.textContent = m.message || m.state; st.style.color = ''; }
 });
 on('team.level', m => {
@@ -1007,13 +1034,67 @@ on('team.level', m => {
 });
 on('team.caption', m => {
   const t = $('#nowText'); t.className = 'now-text'; void t.offsetWidth; t.classList.add('flash');
-  t.innerHTML = ''; t.append(h('span', { class: 'who', style: `color:${m.color}` }, m.name), m.text); $('#nowOrig').textContent = '';
+  t.innerHTML = ''; t.append(whoTag(m), m.text); $('#nowOrig').textContent = m.hidden ? 'Hidden from stream' : '';
   $('#stLines').textContent = m.id; $('#stDelay').textContent = (m.delay + m.took).toFixed(1) + 's'; $('#stLang').textContent = m.lang_name || m.lang;
   const feed = $('#liveFeed'); const near = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
   const empty = $('.empty', feed); if (empty) empty.remove();
-  feed.append(h('div', { class: 'line' }, h('span', { class: 'ts' }, m.clock), h('div', { class: 'tx' }, h('span', { class: 'who', style: `color:${m.color}` }, m.name), m.text)));
+  feed.append(h('div', { class: 'line' + (m.hidden ? ' off' : '') }, h('span', { class: 'ts' }, m.clock),
+    h('div', { class: 'tx', title: 'Click a word Whisper got wrong to fix it for good' }, whoTag(m), ...words(m.text), m.hidden ? h('span', { class: 'off-tag' }, 'hidden from stream') : '')));
   if (near) feed.scrollTop = feed.scrollHeight; else $('#jumpLatest').hidden = false;
 });
+function whoTag(m) {
+  const w = h('span', { class: 'who', style: `color:${m.color}` });
+  if (m.avatar) w.append(h('img', { class: 'av', src: m.avatar, alt: '', onerror: e => e.target.remove() }));
+  w.append(m.name); return w;
+}
+const words = text => text.split(/(\s+)/).map(x => /^\s+$/.test(x) || !x ? x : h('span', { class: 'w', onclick: e => fixWord(e.currentTarget) }, x));
+// click a word in a caption → always write it another way (a glossary fix, used from the next line on)
+function fixWord(el) {
+  $$('.fix-pop').forEach(p => p.remove());
+  const word = el.textContent.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+  const wrong = h('input', { value: word, spellcheck: 'false' }), right = h('input', { placeholder: 'should be…', spellcheck: 'false' });
+  const save = async () => {
+    const a = wrong.value.trim(), b = right.value.trim(); if (!a || !b) { right.focus(); return; }
+    try {
+      const g = await api('glossary.add_fix', { wrong: a, right: b });
+      S.gloss = g; pop.remove();
+      const rx = new RegExp(`\\b${a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
+      $$('#liveFeed .tx .w').forEach(w => { if (rx.test(w.textContent)) w.textContent = w.textContent.replace(rx, b); rx.lastIndex = 0; });
+      const tbl = $('#fixTable'); if (tbl) { $('.empty', tbl)?.remove(); $$('.fix-row', tbl).filter(r => $('input', r).value.trim().toLowerCase() === a.toLowerCase()).forEach(r => r.remove()); tbl.append(fixRow(a, b)); }
+      toast(`From now on "${a}" shows as "${b}"`, 'good', 3500);
+    } catch (e) { toast(e.message, 'bad'); }
+  };
+  const pop = h('div', { class: 'fix-pop' }, h('b', {}, 'Fix a word'), h('div', { class: 'muted small' }, 'Every line from now on uses the fix. Edit the left side to fix a few words at once.'),
+    h('div', { class: 'pair' }, wrong, h('span', { class: 'arrow' }, '→'), right),
+    h('div', { class: 'row' }, h('button', { class: 'btn ghost sm', onclick: () => pop.remove() }, 'Cancel'), h('button', { class: 'btn primary sm', onclick: save }, 'Save fix')));
+  [wrong, right].forEach(i => i.onkeydown = e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') pop.remove(); });
+  document.body.append(pop);
+  const r = el.getBoundingClientRect(), pw = pop.offsetWidth, ph = pop.offsetHeight;
+  pop.style.left = Math.max(12, Math.min(innerWidth - pw - 12, r.left + r.width / 2 - pw / 2)) + 'px';
+  pop.style.top = (r.bottom + ph + 12 > innerHeight ? r.top - ph - 8 : r.bottom + 8) + 'px';
+  right.focus();
+  setTimeout(() => document.addEventListener('mousedown', function off(e) { if (!pop.contains(e.target)) { pop.remove(); document.removeEventListener('mousedown', off); } }), 0);
+}
+// after a session: who talked, and the subtitles file for the VOD
+function showRecap(r, transcript) {
+  if (!r || !r.lines) return;
+  const fmtT = s => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+  $('#recapSub').textContent = `${fmtT(r.duration)} · ${r.lines} lines`;
+  $('#recapStats').innerHTML = '';
+  [['Length', fmtT(r.duration)], ['Lines', r.lines], ['People', r.people.length]].forEach(([a, b]) => $('#recapStats').append(h('div', { class: 'stat' }, h('span', {}, a), h('b', {}, String(b)))));
+  const most = Math.max(...r.people.map(p => p.talk), 1);
+  $('#recapPeople').innerHTML = '';
+  r.people.forEach(p => $('#recapPeople').append(h('div', { class: 'rp', style: `--c:${p.color}` },
+    h('div', { class: 'nm' }, h('span', { class: 'dot', style: `background:${p.color}` }), p.name, p.hidden ? h('span', { class: 'tag off-tag' }, 'hidden') : ''),
+    h('div', { class: 'bar' }, h('i', { style: `width:${Math.max(3, p.talk / most * 100)}%` })),
+    h('span', { class: 'n' }, `${p.lines} line${p.lines === 1 ? '' : 's'} · ${fmtT(p.talk)} talking`))));
+  $('#recapSrt').disabled = !r.srt;
+  $('#recapSrtNote').textContent = r.srt ? 'An .srt file next to the transcript: every line, timed to the session, with the speaker\'s name. Add it to the VOD in your video editor or on YouTube.' + (r.people.some(p => p.hidden) ? ' People hidden from stream are left out.' : '') : 'Everyone was hidden from stream, so there are no subtitles.';
+  $('#recapSrt').onclick = () => api('os.reveal', { path: r.srt });
+  $('#recapTx').onclick = () => api('os.open', { path: transcript });
+  $('#recapClose').onclick = () => { $('#recap').hidden = true; };
+  $('#recap').hidden = false;
+}
 on('team.error', m => {
   toast(m.message, 'bad', 8000);
   if (m.fatal !== false && !S.team.on) { S.team.starting = false; teamButton(false); $('#liveState').textContent = 'Not running'; }

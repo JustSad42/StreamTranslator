@@ -6581,7 +6581,7 @@ dependencies = [
 
 [[package]]
 name = "st-app"
-version = "3.3.0"
+version = "3.4.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -6604,7 +6604,7 @@ dependencies = [
 
 [[package]]
 name = "st-appkit"
-version = "3.3.0"
+version = "3.4.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6619,7 +6619,7 @@ dependencies = [
 
 [[package]]
 name = "st-cli"
-version = "3.3.0"
+version = "3.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -6629,7 +6629,7 @@ dependencies = [
 
 [[package]]
 name = "st-core"
-version = "3.3.0"
+version = "3.4.0"
 dependencies = [
  "anyhow",
  "fancy-regex 0.14.0",
@@ -6641,7 +6641,7 @@ dependencies = [
 
 [[package]]
 name = "st-job"
-version = "3.3.0"
+version = "3.4.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6655,7 +6655,7 @@ dependencies = [
 
 [[package]]
 name = "st-live"
-version = "3.3.0"
+version = "3.4.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -6676,7 +6676,7 @@ dependencies = [
 
 [[package]]
 name = "st-media"
-version = "3.3.0"
+version = "3.4.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -6689,7 +6689,7 @@ dependencies = [
 
 [[package]]
 name = "st-ml"
-version = "3.3.0"
+version = "3.4.0"
 dependencies = [
  "anyhow",
  "ct2rs-sys",
@@ -6707,7 +6707,7 @@ dependencies = [
 
 [[package]]
 name = "st-vision"
-version = "3.3.0"
+version = "3.4.0"
 dependencies = [
  "anyhow",
  "image",

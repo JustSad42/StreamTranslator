@@ -481,6 +481,36 @@ body.dragging .drop-hint{opacity:1}
 .dc-help summary{cursor:pointer;font-weight:600}
 .dc-help ol{margin:8px 0 0;padding-left:20px;line-height:1.6}
 .dc-people-h{margin:4px 0 10px}
+.linkish{background:none;border:0;padding:0;margin-left:8px;color:var(--accent,#9b8cff);font:inherit;font-size:12px;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.voice .av,.who .av{width:22px;height:22px;border-radius:50%;object-fit:cover;flex:none;box-shadow:0 0 0 2px var(--c,transparent)}
+.who .av{width:1.05em;height:1.05em;vertical-align:-.16em;margin-right:.3em;box-shadow:none}
+.voice .eye{opacity:.7;min-width:52px}
+.voice .eye:hover{opacity:1}
+.voice.off{opacity:.5}
+.voice.off .vname{text-decoration:line-through;text-decoration-thickness:1px}
+.voice .tag.off-tag{font-size:11px;color:var(--muted)}
+.line.off .tx{opacity:.45}
+.line .off-tag{font-size:11px;color:var(--muted);margin-left:8px;white-space:nowrap}
+.tx .w{cursor:pointer;border-radius:4px;transition:background .15s}
+.tx .w:hover{background:rgba(155,140,255,.18)}
+.fix-pop{position:fixed;z-index:90;width:300px;padding:14px;border-radius:14px;background:linear-gradient(180deg,#1b1b25,#13131a);border:1px solid var(--line2);box-shadow:0 20px 60px rgba(0,0,0,.6);animation:reveal .2s var(--ease)}
+.fix-pop .muted{margin-bottom:10px}
+.fix-pop .pair{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;margin-bottom:12px}
+.fix-pop .pair input{min-width:0;width:100%}
+.fix-pop .row{justify-content:flex-end;gap:8px}
+.recap-box{width:min(92vw,640px)}
+.recap-body{padding:18px 22px 22px;display:flex;flex-direction:column;gap:14px;overflow-y:auto}
+.recap-body .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.recap-people{display:flex;flex-direction:column;gap:10px}
+.rp{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center}
+.rp .nm{display:flex;align-items:center;gap:9px;font-weight:700;min-width:120px}
+.rp .dot{width:10px;height:10px;border-radius:50%;flex:none}
+.rp .bar{height:8px;border-radius:99px;background:rgba(255,255,255,.06);overflow:hidden}
+.rp .bar i{display:block;height:100%;border-radius:99px;background:var(--c);box-shadow:0 0 12px var(--c);animation:grow .7s var(--ease) both}
+@keyframes grow{from{width:0}}
+.rp .n{font-size:12.5px;color:var(--muted);white-space:nowrap}
+.recap-files{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:14px;border-radius:12px;background:rgba(255,255,255,.035);border:1px solid var(--line)}
+.recap-files em{display:block;font-style:normal;color:var(--muted);font-size:12.5px;margin-top:2px}
 .voice .sub{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:40%}
 .voice .talk{width:7px;height:7px;border-radius:50%;background:var(--c);opacity:0;transition:opacity .15s;flex:none}
 .voice.talking .talk{opacity:1;box-shadow:0 0 10px var(--c)}
