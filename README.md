@@ -2,9 +2,13 @@
 
 Translate other streamers into English with Whisper on your own GPU. Nothing is sent to an AI service.
 
+![Clip tab: pick a section of a VOD on the timeline, with start and end frames, then translate it](docs/screenshots/clip-section.webp)
+
 Open **StreamTranslator** from the Start menu.
 
 Download the installer from [Releases](https://github.com/JustSad42/StreamTranslator/releases/latest).
+
+The channels, VODs and captions in these screenshots are made up.
 
 ## New in 2.3
 
@@ -49,6 +53,8 @@ Download the installer from [Releases](https://github.com/JustSad42/StreamTransl
 
 ## Clip tab: a VOD section, translated
 
+![Typing a channel name lists their recent VODs](docs/screenshots/clip-vods.png)
+
 1. Choose how to find the moment:
    - **Their VOD**: paste their VOD link (Twitch, YouTube or Kick), or type a Twitch channel name to pick from their recent VODs.
      A link with `?t=1h02m30s` starts the section there.
@@ -74,6 +80,8 @@ Download the installer from [Releases](https://github.com/JustSad42/StreamTransl
 
 ## Live tab: any live stream, translated in real time
 
+![Live tab: the newest English caption in large text, the original Korean under it, and the caption log](docs/screenshots/live.png)
+
 Type a channel (or paste any Twitch / YouTube / Kick live link) and press **Go live**. You get:
 
 - Draft captions while they talk, then the final translation about 1–2 s after each sentence.
@@ -88,6 +96,8 @@ Type a channel (or paste any Twitch / YouTube / Kick live link) and press **Go l
 Turn off the League glossary for non-League streams.
 
 ## History tab
+
+![History: translated clips and live sessions as cards](docs/screenshots/history.webp)
 
 Every clip and live session, with thumbnails. Search finds titles, channels **and what was said** (with
 timestamps). From a card you can play, edit subtitles, open the transcript, re-open the section in the Clip tab,
