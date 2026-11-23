@@ -3,7 +3,7 @@
 # Installed copies see the release at their next start and offer "Update now".
 #
 # From 3.0.0 on this builds the Rust app in rust\ (rust\build-installer.ps1). The Python app in
-# streamtranslator\ is no longer released; its build.ps1 still works for the 2.x line.
+# streamtranslator\ was removed after 3.4.0 (see git history); only its ui\ folder remains.
 #
 #   powershell -ExecutionPolicy Bypass -File release.ps1 -Version 3.0.1 -Notes "Fixed the chat translator"
 #   (-Notes can also be a path to a text/markdown file, e.g. release-notes\3.0.1.md)

@@ -1,7 +1,6 @@
 # StreamTranslator 3 (Rust)
 
-The Rust rewrite of StreamTranslator. The Python app in `../streamtranslator/` stays the reference and keeps
-shipping until 3.0.0. Plan and results: `../docs/RUST_REWRITE_HANDOFF.md`, `../docs/RUST_PHASE0_RESULTS.md` … `RUST_PHASE4_RESULTS.md`.
+The Rust rewrite of StreamTranslator. The Python 2.x app was removed after 3.4.0 (it is in git history). Plan and results: `../docs/RUST_REWRITE_HANDOFF.md`, `../docs/RUST_PHASE0_RESULTS.md` … `RUST_PHASE4_RESULTS.md`.
 
 ## Layout
 
@@ -16,7 +15,7 @@ shipping until 3.0.0. Plan and results: `../docs/RUST_REWRITE_HANDOFF.md`, `../d
 | `crates/st-live` | Live mode: stream audio to captions, Twitch chat translation, the OBS browser source. |
 | `apps/st-app` | `StreamTranslator.exe`: the Tauri window showing `../streamtranslator/ui` unchanged, its backend, and the floating caption window. |
 | `ui-tests/` | End-to-end tests driving the real app (`smoke.mjs` for clips and tabs, `live.mjs` for live mode). |
-| `apps/st-cli` | `streamtranslator-cli.exe`, same arguments as `python -m streamtranslator.cli`. |
+| `apps/st-cli` | `streamtranslator-cli.exe`, same arguments as the old Python CLI. |
 | `installer/` | Inno Setup script for the 3.0.0 installer (built by `build-installer.ps1`). |
 
 ## Building

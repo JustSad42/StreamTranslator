@@ -1,7 +1,7 @@
 ; StreamTranslator 3 (Rust) installer, Inno Setup 6. Built by ..\build-installer.ps1, which stages the files in
 ; ..\dist\StreamTranslator and passes /DAppVersion=x.y.z.
 ;
-; Same AppId, install folder, mutex and file name as the Python app's installer (..\..\installer.iss), so the
+; Same AppId, install folder, mutex and file name as the old Python app's installer (removed; see git history), so the
 ; installed 2.x apps update to this in place with their own updater (/SILENT /SUPPRESSMSGBOXES /NORESTART /LOG=...).
 ; Installs per user (no admin prompt) to %LOCALAPPDATA%\Programs\StreamTranslator.
 ;

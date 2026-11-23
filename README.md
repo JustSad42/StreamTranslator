@@ -2,7 +2,7 @@
 
 Translate other streamers into English with Whisper on your own GPU. Nothing is sent to an AI service.
 
-Open **StreamTranslator** from the Start menu. (From the source folder: double-click `StreamTranslator.pyw`.)
+Open **StreamTranslator** from the Start menu.
 
 Download the installer from [Releases](https://github.com/JustSad42/StreamTranslator/releases/latest).
 
@@ -46,7 +46,6 @@ Download the installer from [Releases](https://github.com/JustSad42/StreamTransl
   the PC (CUDA Toolkit, Faster-Whisper-XXL, Subtitle Edit) or downloads NVIDIA's official ones
   (1.25 GB, checksum-checked), downloads models, or uses a faster-whisper model folder you already have.
   FFmpeg is bundled. Voice isolation now runs on DirectML (any GPU, and faster).
-- **Tests:** `.venv\Scripts\python -m pytest -q` (49 tests).
 
 ## Clip tab: a VOD section, translated
 
@@ -118,8 +117,10 @@ or remove it from the list (files stay on disk).
 ## Command line
 
 ```
-.venv\Scripts\python -m streamtranslator.cli https://www.twitch.tv/videos/123 --start 1:02:30 --end 1:35:00
+streamtranslator-cli https://www.twitch.tv/videos/123 --start 1:02:30 --end 1:35:00
 ```
+
+Built from `rust\apps\st-cli` (see `rust\README.md`).
 
 ## Limits
 
@@ -131,31 +132,21 @@ or remove it from the list (files stay on disk).
 
 ## Building
 
-```
-powershell -ExecutionPolicy Bypass -File build.ps1
-```
-
-Makes `dist\StreamTranslator\StreamTranslator.exe` and `dist\StreamTranslator-Setup-<version>.exe`
-(per-user install, Start menu entry, no admin). Needs the `.venv` set up:
+The app is Rust (Tauri) in `rust\`; the interface is in `streamtranslator\ui\`. Build and test steps are in
+`rust\README.md`. The installer:
 
 ```
-uv venv --python 3.12 .venv
-uv pip install --python .venv\Scripts\python.exe -r requirements.txt
-uv pip uninstall --python .venv\Scripts\python.exe onnxruntime
-uv pip install --python .venv\Scripts\python.exe --reinstall onnxruntime-gpu==1.22.0
+powershell -ExecutionPolicy Bypass -File rust\build-installer.ps1
 ```
 
-(faster-whisper pulls in the CPU-only onnxruntime, which hides the GPU one, so it's swapped out.)
+Needs an NVIDIA GPU for speed (it falls back to the CPU, which is slow).
 
 ## Publishing an update
 
 ```
-powershell -ExecutionPolicy Bypass -File release.ps1 -Version 2.2.1 -Notes "What changed"
+powershell -ExecutionPolicy Bypass -File release.ps1 -Version 3.4.1 -Notes "What changed"
 ```
 
 Sets the version, runs the tests, builds the installer, commits, tags, pushes and creates the GitHub
 release with the installer attached. Installed copies offer the update the next time they open.
 Needs the GitHub CLI logged in (`gh auth login`).
-
-Needs `ffmpeg` on PATH and an NVIDIA GPU (it falls back to the CPU, which is slow). The app's code is in
-`streamtranslator/`, with the interface in `streamtranslator/ui/`.
