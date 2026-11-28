@@ -8,7 +8,7 @@
     "withGlobalTauri": true,
     "windows": [],
     "security": {
-      "csp": null,
+      "csp": "script-src 'self'; object-src 'none'; base-uri 'none'", "dangerousDisableAssetCspModification": ["style-src"],
       "assetProtocol": { "enable": true, "scope": ["**"] }
     }
   },
